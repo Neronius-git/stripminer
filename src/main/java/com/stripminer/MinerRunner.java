@@ -6,12 +6,18 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.util.concurrent.Semaphore;
+import java.util.function.Supplier;
 
 /**
  * Runs a {@link StripMineJob} on its own thread in lock-step with the client tick: on every
  * client tick the job gets exactly one turn while the client thread waits, so the job never
  * touches the game concurrently with the client. This lets the mining logic be written as plain
  * sequential code ("mine branch, then look for ores, then walk back") instead of a state machine.
+ *
+ * <p>The job thread only reads the world and decides what to do. Anything that changes the game
+ * (breaking/placing blocks, inventory clicks, chat, screens) must run on Minecraft's main thread
+ * (Sodium and the renderer check this), so the job hands those actions to the client thread with
+ * {@link #onMain(Runnable)} and waits for them.
  */
 public final class MinerRunner {
 	public static final Logger LOG = LoggerFactory.getLogger("stripminer");
@@ -21,6 +27,10 @@ public final class MinerRunner {
 	private static volatile boolean running;
 	private static volatile String cancelReason;
 	private static volatile StripMineJob current;
+	private static volatile Thread worker;
+	private static volatile Supplier<?> mainTask;
+	private static volatile Object mainResult;
+	private static volatile Throwable mainError;
 
 	private MinerRunner() {
 	}
@@ -66,11 +76,13 @@ public final class MinerRunner {
 				}
 				sendChat(endMessage);
 				current = null;
+				worker = null;
 				running = false;
 				clientTurn.release();
 			}
 		}, "StripMiner");
 		thread.setDaemon(true);
+		worker = thread;
 		thread.start();
 		return true;
 	}
@@ -90,7 +102,54 @@ public final class MinerRunner {
 			stop("Stopped: left the world.");
 		}
 		workerTurn.release();
-		clientTurn.acquireUninterruptibly();
+		while (true) {
+			clientTurn.acquireUninterruptibly();
+			Supplier<?> task = mainTask;
+			if (task == null) {
+				break; // the job finished its turn for this tick
+			}
+			// The job asked for something to be done on the main thread.
+			mainTask = null;
+			try {
+				mainResult = task.get();
+			} catch (Throwable t) {
+				mainError = t;
+			}
+			workerTurn.release();
+		}
+	}
+
+	/** Runs {@code task} on Minecraft's main thread and returns its result (call from the job). */
+	@SuppressWarnings("unchecked")
+	public static <T> T callOnMain(Supplier<T> task) {
+		if (Thread.currentThread() != worker) {
+			return task.get();
+		}
+		mainTask = task;
+		clientTurn.release();
+		workerTurn.acquireUninterruptibly();
+		Object result = mainResult;
+		Throwable error = mainError;
+		mainResult = null;
+		mainError = null;
+		if (error instanceof RuntimeException e) {
+			throw e;
+		}
+		if (error instanceof Error e) {
+			throw e;
+		}
+		if (error != null) {
+			throw new RuntimeException(error);
+		}
+		return (T) result;
+	}
+
+	/** Runs {@code action} on Minecraft's main thread and waits for it (call from the job). */
+	public static void onMain(Runnable action) {
+		callOnMain(() -> {
+			action.run();
+			return null;
+		});
 	}
 
 	/** Called from the worker thread: hands control back to the client and waits for the next tick. */
@@ -107,9 +166,11 @@ public final class MinerRunner {
 		if (text == null) {
 			return;
 		}
-		Minecraft mc = Minecraft.getInstance();
-		if (mc.player != null) {
-			mc.player.sendSystemMessage(Component.literal("§6[StripMiner]§r " + text));
-		}
+		onMain(() -> {
+			Minecraft mc = Minecraft.getInstance();
+			if (mc.player != null) {
+				mc.player.sendSystemMessage(Component.literal("§6[StripMiner]§r " + text));
+			}
+		});
 	}
 }

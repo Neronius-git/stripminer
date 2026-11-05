@@ -562,7 +562,7 @@ public final class StripMineJob {
 		if (WorldChecks.level().getBlockState(bottom).is(Blocks.TORCH)) {
 			Direction face = faceTowardsEyes(bottom);
 			lookAt(Vec3.atCenterOf(bottom));
-			gameMode().startDestroyBlock(bottom, face);
+			MinerRunner.onMain(() -> gameMode().startDestroyBlock(bottom, face));
 			for (int i = 0; i < 20; i++) {
 				tick();
 				if (WorldChecks.level().getEntitiesOfClass(ItemEntity.class, area).isEmpty()) {
@@ -578,7 +578,7 @@ public final class StripMineJob {
 		player().getInventory().setSelectedSlot(torchSlot);
 		Vec3 hit = Vec3.atCenterOf(floor).add(0, 0.5, 0);
 		lookAt(hit);
-		gameMode().useItemOn(player(), InteractionHand.MAIN_HAND, new BlockHitResult(hit, Direction.UP, floor, false));
+		MinerRunner.onMain(() -> gameMode().useItemOn(player(), InteractionHand.MAIN_HAND, new BlockHitResult(hit, Direction.UP, floor, false)));
 		swingHand();
 	}
 
@@ -819,7 +819,7 @@ public final class StripMineJob {
 				return false;
 			}
 			if (waited++ > 600) {
-				gm.stopDestroyBlock();
+				MinerRunner.onMain(() -> gm.stopDestroyBlock());
 				lastFailure = "block at " + fmt(pos) + " took too long to mine";
 				return false;
 			}
@@ -827,7 +827,7 @@ public final class StripMineJob {
 			Direction face = faceTowardsEyes(pos);
 			lookAt(Vec3.atCenterOf(pos).add(face.getStepX() * 0.5, face.getStepY() * 0.5, face.getStepZ() * 0.5));
 			selectBestTool(state);
-			gm.continueDestroyBlock(pos, face);
+			MinerRunner.onMain(() -> gm.continueDestroyBlock(pos, face));
 			swingHand();
 			tick();
 		}
@@ -978,7 +978,8 @@ public final class StripMineJob {
 				return -1;
 			}
 			// Inventory slots 9-35 have the same index in the player's inventory menu.
-			gameMode().handleContainerInput(player().inventoryMenu.containerId, i, target, ContainerInput.SWAP, player());
+			final int from = i, to = target;
+			MinerRunner.onMain(() -> gameMode().handleContainerInput(player().inventoryMenu.containerId, from, to, ContainerInput.SWAP, player()));
 			tick();
 			return what.test(inv.getItem(target)) ? target : -1;
 		}
@@ -1004,7 +1005,7 @@ public final class StripMineJob {
 		player().getInventory().setSelectedSlot(slot);
 		Vec3 hit = Vec3.atCenterOf(floor).add(0, 0.5, 0);
 		lookAt(hit);
-		gameMode().useItemOn(player(), InteractionHand.MAIN_HAND, new BlockHitResult(hit, Direction.UP, floor, false));
+		MinerRunner.onMain(() -> gameMode().useItemOn(player(), InteractionHand.MAIN_HAND, new BlockHitResult(hit, Direction.UP, floor, false)));
 		swingHand();
 		tick();
 	}
@@ -1020,7 +1021,7 @@ public final class StripMineJob {
 		lookAt(hit);
 		setKey(mc.options.keyShift, true);
 		tick();
-		gameMode().useItemOn(player(), InteractionHand.MAIN_HAND, new BlockHitResult(hit, dir, against, false));
+		MinerRunner.onMain(() -> gameMode().useItemOn(player(), InteractionHand.MAIN_HAND, new BlockHitResult(hit, dir, against, false)));
 		swingHand();
 		tick();
 		tick();
@@ -1047,7 +1048,7 @@ public final class StripMineJob {
 		phase = "eating";
 		p.getInventory().setSelectedSlot(slot);
 		p.setXRot(-90f);
-		gameMode().useItem(p, InteractionHand.MAIN_HAND);
+		MinerRunner.onMain(() -> gameMode().useItem(p, InteractionHand.MAIN_HAND));
 		setKey(mc.options.keyUse, true);
 		try {
 			for (int i = 0; i < 60; i++) {
@@ -1086,7 +1087,7 @@ public final class StripMineJob {
 
 	private void throwStack(int invSlot) {
 		LocalPlayer p = player();
-		gameMode().handleContainerInput(p.inventoryMenu.containerId, menuSlot(invSlot), 1, ContainerInput.THROW, p);
+		MinerRunner.onMain(() -> gameMode().handleContainerInput(p.inventoryMenu.containerId, menuSlot(invSlot), 1, ContainerInput.THROW, p));
 	}
 
 	/** Total gravel/sand carried. */
@@ -1131,10 +1132,11 @@ public final class StripMineJob {
 			int id = p.inventoryMenu.containerId;
 			ItemStack kept = inv.getItem(keep);
 			if (s.is(kept.getItem()) && kept.getCount() < kept.getMaxStackSize()) {
-				gameMode().handleContainerInput(id, menuSlot(i), 0, ContainerInput.PICKUP, p);
-				gameMode().handleContainerInput(id, menuSlot(keep), 0, ContainerInput.PICKUP, p);
+				final int from = i, into = keep;
+				MinerRunner.onMain(() -> gameMode().handleContainerInput(id, menuSlot(from), 0, ContainerInput.PICKUP, p));
+				MinerRunner.onMain(() -> gameMode().handleContainerInput(id, menuSlot(into), 0, ContainerInput.PICKUP, p));
 				if (!p.inventoryMenu.getCarried().isEmpty()) {
-					gameMode().handleContainerInput(id, menuSlot(i), 0, ContainerInput.PICKUP, p);
+					MinerRunner.onMain(() -> gameMode().handleContainerInput(id, menuSlot(from), 0, ContainerInput.PICKUP, p));
 				}
 			}
 			if (FALLING_FILLER.contains(inv.getItem(i).getItem())) {
@@ -1250,7 +1252,7 @@ public final class StripMineJob {
 		} finally {
 			LocalPlayer p = player();
 			if (p.containerMenu != p.inventoryMenu) {
-				p.closeContainer();
+				MinerRunner.onMain(() -> p.closeContainer());
 			}
 			tick();
 			phase = "picking the crafting table back up";
@@ -1287,23 +1289,25 @@ public final class StripMineJob {
 		int id = menu.containerId;
 		// In the crafting table menu: 0 = result, 1-9 = grid, 10-36 = inventory, 37-45 = hotbar.
 		int slot = invSlot < 9 ? 37 + invSlot : invSlot + 1;
-		gm.handleContainerInput(id, slot, 0, ContainerInput.PICKUP, p);
-		gm.handleContainerInput(id, -999, AbstractContainerMenu.getQuickcraftMask(0, 0), ContainerInput.QUICK_CRAFT, p);
+		MinerRunner.onMain(() -> gm.handleContainerInput(id, slot, 0, ContainerInput.PICKUP, p));
+		MinerRunner.onMain(() -> gm.handleContainerInput(id, -999, AbstractContainerMenu.getQuickcraftMask(0, 0), ContainerInput.QUICK_CRAFT, p));
 		for (int grid = 1; grid <= 9; grid++) {
-			gm.handleContainerInput(id, grid, AbstractContainerMenu.getQuickcraftMask(1, 0), ContainerInput.QUICK_CRAFT, p);
+			final int g = grid;
+			MinerRunner.onMain(() -> gm.handleContainerInput(id, g, AbstractContainerMenu.getQuickcraftMask(1, 0), ContainerInput.QUICK_CRAFT, p));
 		}
-		gm.handleContainerInput(id, -999, AbstractContainerMenu.getQuickcraftMask(2, 0), ContainerInput.QUICK_CRAFT, p);
+		MinerRunner.onMain(() -> gm.handleContainerInput(id, -999, AbstractContainerMenu.getQuickcraftMask(2, 0), ContainerInput.QUICK_CRAFT, p));
 		if (!menu.getCarried().isEmpty()) {
-			gm.handleContainerInput(id, slot, 0, ContainerInput.PICKUP, p); // put the leftovers back
+			MinerRunner.onMain(() -> gm.handleContainerInput(id, slot, 0, ContainerInput.PICKUP, p)); // put the leftovers back
 		}
 		tick();
 		tick();
-		gm.handleContainerInput(id, 0, 0, ContainerInput.QUICK_MOVE, p);
+		MinerRunner.onMain(() -> gm.handleContainerInput(id, 0, 0, ContainerInput.QUICK_MOVE, p));
 		tick();
 		// Anything left in the grid goes back to the inventory.
 		for (int grid = 1; grid <= 9; grid++) {
 			if (!menu.getSlot(grid).getItem().isEmpty()) {
-				gm.handleContainerInput(id, grid, 0, ContainerInput.QUICK_MOVE, p);
+				final int g = grid;
+				MinerRunner.onMain(() -> gm.handleContainerInput(id, g, 0, ContainerInput.QUICK_MOVE, p));
 			}
 		}
 		tick();
@@ -1328,7 +1332,7 @@ public final class StripMineJob {
 			lookAt(hit);
 			setKey(mc.options.keyShift, true);
 			tick();
-			gameMode().useItemOn(player(), InteractionHand.MAIN_HAND, new BlockHitResult(hit, Direction.UP, floor, false));
+			MinerRunner.onMain(() -> gameMode().useItemOn(player(), InteractionHand.MAIN_HAND, new BlockHitResult(hit, Direction.UP, floor, false)));
 			swingHand();
 			tick();
 			setKey(mc.options.keyShift, false);
@@ -1346,7 +1350,7 @@ public final class StripMineJob {
 		tick();
 		Vec3 hit = Vec3.atCenterOf(table).add(0, 0.5, 0);
 		lookAt(hit);
-		gameMode().useItemOn(player(), InteractionHand.MAIN_HAND, new BlockHitResult(hit, Direction.UP, table, false));
+		MinerRunner.onMain(() -> gameMode().useItemOn(player(), InteractionHand.MAIN_HAND, new BlockHitResult(hit, Direction.UP, table, false)));
 		for (int i = 0; i < 20; i++) {
 			tick();
 			if (player().containerMenu instanceof CraftingMenu) {
@@ -1408,7 +1412,7 @@ public final class StripMineJob {
 	}
 
 	private void swingHand() {
-		player().swing(InteractionHand.MAIN_HAND, SwingAnimation.DEFAULT, false);
+		MinerRunner.onMain(() -> player().swing(InteractionHand.MAIN_HAND, SwingAnimation.DEFAULT, false));
 	}
 
 	private static void setKey(KeyMapping key, boolean down) {
@@ -1433,7 +1437,7 @@ public final class StripMineJob {
 			throw new StopException("§cHealth is low (" + Math.round(p.getHealth()) + "). Stopped.");
 		}
 		if (++ticks % 10 == 0) {
-			mc.gui.hud.setOverlayMessage(Component.literal("§6StripMiner:§r " + status()), false);
+			MinerRunner.onMain(() -> mc.gui.hud.setOverlayMessage(Component.literal("§6StripMiner:§r " + status()), false));
 		}
 	}
 
@@ -1447,7 +1451,7 @@ public final class StripMineJob {
 		setKey(mc.options.keyUse, false);
 		MultiPlayerGameMode gm = mc.gameMode;
 		if (gm != null && mc.player != null) {
-			gm.stopDestroyBlock();
+			MinerRunner.onMain(() -> gm.stopDestroyBlock());
 		}
 	}
 }
