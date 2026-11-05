@@ -1169,8 +1169,6 @@ public final class StripMineJob {
 		}
 		tick();
 	}
-		tick();
-	}
 
 	// ------------------------------------------------------------------------------------------
 	// Crafting full stacks into blocks
