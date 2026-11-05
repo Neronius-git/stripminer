@@ -19,6 +19,7 @@ import net.minecraft.world.inventory.CraftingMenu;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
+import net.minecraft.world.item.component.SwingAnimation;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.state.BlockState;
@@ -578,7 +579,7 @@ public final class StripMineJob {
 		Vec3 hit = Vec3.atCenterOf(floor).add(0, 0.5, 0);
 		lookAt(hit);
 		gameMode().useItemOn(player(), InteractionHand.MAIN_HAND, new BlockHitResult(hit, Direction.UP, floor, false));
-		player().swing(InteractionHand.MAIN_HAND);
+		swingHand();
 	}
 
 	private void addTouchingOres(BlockPos open, Set<BlockPos> seen, List<BlockPos> pending) {
@@ -827,7 +828,7 @@ public final class StripMineJob {
 			lookAt(Vec3.atCenterOf(pos).add(face.getStepX() * 0.5, face.getStepY() * 0.5, face.getStepZ() * 0.5));
 			selectBestTool(state);
 			gm.continueDestroyBlock(pos, face);
-			player().swing(InteractionHand.MAIN_HAND);
+			swingHand();
 			tick();
 		}
 		cleared.add(pos.immutable());
@@ -1004,7 +1005,7 @@ public final class StripMineJob {
 		Vec3 hit = Vec3.atCenterOf(floor).add(0, 0.5, 0);
 		lookAt(hit);
 		gameMode().useItemOn(player(), InteractionHand.MAIN_HAND, new BlockHitResult(hit, Direction.UP, floor, false));
-		player().swing(InteractionHand.MAIN_HAND);
+		swingHand();
 		tick();
 	}
 
@@ -1020,7 +1021,7 @@ public final class StripMineJob {
 		setKey(mc.options.keyShift, true);
 		tick();
 		gameMode().useItemOn(player(), InteractionHand.MAIN_HAND, new BlockHitResult(hit, dir, against, false));
-		player().swing(InteractionHand.MAIN_HAND);
+		swingHand();
 		tick();
 		tick();
 		setKey(mc.options.keyShift, false);
@@ -1328,7 +1329,7 @@ public final class StripMineJob {
 			setKey(mc.options.keyShift, true);
 			tick();
 			gameMode().useItemOn(player(), InteractionHand.MAIN_HAND, new BlockHitResult(hit, Direction.UP, floor, false));
-			player().swing(InteractionHand.MAIN_HAND);
+			swingHand();
 			tick();
 			setKey(mc.options.keyShift, false);
 			tick();
@@ -1404,6 +1405,10 @@ public final class StripMineJob {
 		p.setYRot(yaw);
 		p.setYHeadRot(yaw);
 		p.setXRot(Mth.clamp(pitch, -90f, 90f));
+	}
+
+	private void swingHand() {
+		player().swing(InteractionHand.MAIN_HAND, SwingAnimation.DEFAULT, false);
 	}
 
 	private static void setKey(KeyMapping key, boolean down) {
