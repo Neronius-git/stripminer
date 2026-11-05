@@ -1,6 +1,6 @@
 # Strip Miner
 
-A client-side Fabric mod for **Minecraft 1.21.1** that strip-mines on its own at a height you
+A client-side Fabric mod for **Minecraft 26.3** that strip-mines on its own at a height you
 choose, mines the ores it reveals, picks up the drops, avoids lava and lights the tunnel with torches.
 
 ## What it does
@@ -60,8 +60,10 @@ other side.
   etc. is full (64), it places a crafting table next to itself, crafts those stacks into blocks,
   then mines the table and picks it back up. Bring a crafting table. Turn off with
   `/config compressfullstacks false`.
-- **Keeps gravel** (and sand) for filling lava. When the inventory is almost full, it throws
-  cobblestone, deepslate, dirt and other junk behind it. It keeps one stack for filling gaps.
+- **Keeps at most one stack of gravel** (or sand) for filling lava. Extra gravel is merged into
+  that stack and the rest is thrown away. All other stone-type blocks (cobblestone, deepslate,
+  dirt, tuff, ...) are treated as throwaway blocks: when the inventory is almost full it throws
+  them behind it, keeping one stack to bridge gaps and block off lava. It keeps one stack for filling gaps.
 - Moves torches, food and filler blocks from your inventory into the hotbar when needed.
 - Re-mines gravel and sand that falls into the tunnel.
 
@@ -114,11 +116,11 @@ torches, some food, a crafting table, some cobblestone, and gravel or sand for l
 
 ## Installing
 
-1. Install [Fabric Loader](https://fabricmc.net/use/) for Minecraft 1.21.1 and put
+1. Install [Fabric Loader](https://fabricmc.net/use/) for Minecraft 26.3 and put
    [Fabric API](https://modrinth.com/mod/fabric-api) in your `mods` folder.
 2. Download the jar: open the **Actions** tab of this repository, click the latest successful
    **build** run, and download the **stripminer-mod-jar** artifact. Unzip it and put
-   `stripminer-1.0.0.jar` (not the `-sources` one) in your `.minecraft/mods` folder.
+   `stripminer-2.0.0.jar` (not the `-sources` one) in your `.minecraft/mods` folder.
 
 ## Building it yourself
 
@@ -126,4 +128,4 @@ torches, some food, a crafting table, some cobblestone, and gravel or sand for l
 ./gradlew build
 ```
 
-The jar ends up in `build/libs/`. You need JDK 21 or newer.
+The jar ends up in `build/libs/`. You need JDK 25 or newer.

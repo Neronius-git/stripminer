@@ -4,7 +4,7 @@ import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
 import net.fabricmc.loader.api.FabricLoader;
 import net.minecraft.core.registries.BuiltInRegistries;
-import net.minecraft.resources.ResourceLocation;
+import net.minecraft.resources.Identifier;
 import net.minecraft.world.level.block.Block;
 
 import java.io.Reader;
@@ -108,9 +108,9 @@ public final class MinerConfig {
 	public Set<Block> resolveOres() {
 		Set<Block> blocks = new HashSet<>();
 		for (String id : ores) {
-			ResourceLocation rl = ResourceLocation.tryParse(id);
-			if (rl != null) {
-				BuiltInRegistries.BLOCK.getOptional(rl).ifPresent(blocks::add);
+			Identifier rl = Identifier.tryParse(id);
+			if (rl != null && BuiltInRegistries.BLOCK.containsKey(rl)) {
+				blocks.add(BuiltInRegistries.BLOCK.getValue(rl));
 			}
 		}
 		return blocks;

@@ -14,14 +14,11 @@ import net.minecraft.world.entity.item.FallingBlockEntity;
 import net.minecraft.world.entity.item.ItemEntity;
 import net.minecraft.world.entity.player.Inventory;
 import net.minecraft.world.inventory.AbstractContainerMenu;
-import net.minecraft.world.inventory.ClickType;
+import net.minecraft.world.inventory.ContainerInput;
 import net.minecraft.world.inventory.CraftingMenu;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
-import net.minecraft.world.item.crafting.CraftingInput;
-import net.minecraft.world.item.crafting.RecipeType;
-import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.state.BlockState;
@@ -88,7 +85,6 @@ public final class StripMineJob {
 	private int ticks;
 	private boolean warnedNoTorches;
 	private boolean warnedNoTable;
-	private final Map<Item, Boolean> compressible = new HashMap<>();
 	private volatile String phase = "starting";
 	private String lastFailure = "";
 	/** Blocks dug since the last call to {@link #takeCleared()}, used to spot newly revealed ores. */
@@ -578,7 +574,7 @@ public final class StripMineJob {
 
 	private void placeTorchOn(BlockPos cell, int torchSlot) {
 		BlockPos floor = cell.below();
-		player().getInventory().selected = torchSlot;
+		player().getInventory().setSelectedSlot(torchSlot);
 		Vec3 hit = Vec3.atCenterOf(floor).add(0, 0.5, 0);
 		lookAt(hit);
 		gameMode().useItemOn(player(), InteractionHand.MAIN_HAND, new BlockHitResult(hit, Direction.UP, floor, false));
@@ -663,7 +659,8 @@ public final class StripMineJob {
 
 	private List<ItemEntity> drops(AABB area) {
 		List<ItemEntity> list = new ArrayList<>(WorldChecks.level().getEntitiesOfClass(ItemEntity.class, area,
-				e -> e.isAlive() && !JUNK.contains(e.getItem().getItem())));
+				e -> e.isAlive() && !JUNK.contains(e.getItem().getItem())
+						&& !(FALLING_FILLER.contains(e.getItem().getItem()) && gravelCount() >= 64)));
 		list.sort(Comparator.comparingDouble(e -> e.distanceToSqr(player())));
 		return list;
 	}
@@ -917,7 +914,7 @@ public final class StripMineJob {
 			}
 		}
 		if (best >= 0) {
-			inv.selected = best;
+			inv.setSelectedSlot(best);
 		}
 	}
 
@@ -980,7 +977,7 @@ public final class StripMineJob {
 				return -1;
 			}
 			// Inventory slots 9-35 have the same index in the player's inventory menu.
-			gameMode().handleInventoryMouseClick(player().inventoryMenu.containerId, i, target, ClickType.SWAP, player());
+			gameMode().handleContainerInput(player().inventoryMenu.containerId, i, target, ContainerInput.SWAP, player());
 			tick();
 			return what.test(inv.getItem(target)) ? target : -1;
 		}
@@ -1003,7 +1000,7 @@ public final class StripMineJob {
 			return;
 		}
 		warnedNoTorches = false;
-		player().getInventory().selected = slot;
+		player().getInventory().setSelectedSlot(slot);
 		Vec3 hit = Vec3.atCenterOf(floor).add(0, 0.5, 0);
 		lookAt(hit);
 		gameMode().useItemOn(player(), InteractionHand.MAIN_HAND, new BlockHitResult(hit, Direction.UP, floor, false));
@@ -1017,7 +1014,7 @@ public final class StripMineJob {
 		if (slot < 0) {
 			return false;
 		}
-		player().getInventory().selected = slot;
+		player().getInventory().setSelectedSlot(slot);
 		Vec3 hit = Vec3.atCenterOf(against).add(dir.getStepX() * 0.5, dir.getStepY() * 0.5, dir.getStepZ() * 0.5);
 		lookAt(hit);
 		setKey(mc.options.keyShift, true);
@@ -1047,7 +1044,7 @@ public final class StripMineJob {
 			return;
 		}
 		phase = "eating";
-		p.getInventory().selected = slot;
+		p.getInventory().setSelectedSlot(slot);
 		p.setXRot(-90f);
 		gameMode().useItem(p, InteractionHand.MAIN_HAND);
 		setKey(mc.options.keyUse, true);
@@ -1074,16 +1071,90 @@ public final class StripMineJob {
 		return free;
 	}
 
-	/** Throws stone-type junk behind the player when the inventory is nearly full (keeps one filler stack). */
-	private void dropJunk() {
-		if (!cfg.dropJunk || freeSlots() > 3) {
-			return;
-		}
+	private static int menuSlot(int invSlot) {
+		// Player inventory menu: hotbar 0-8 is at 36-44, the main inventory 9-35 keeps its index.
+		return invSlot < 9 ? 36 + invSlot : invSlot;
+	}
+
+	private void faceBackwards() {
 		LocalPlayer p = player();
 		p.setYRot(forward.getOpposite().toYRot());
 		p.setXRot(0f);
 		tick();
+	}
+
+	private void throwStack(int invSlot) {
+		LocalPlayer p = player();
+		gameMode().handleContainerInput(p.inventoryMenu.containerId, menuSlot(invSlot), 1, ContainerInput.THROW, p);
+	}
+
+	/** Total gravel/sand carried. */
+	private int gravelCount() {
+		Inventory inv = player().getInventory();
+		int n = 0;
+		for (int i = 0; i < 36; i++) {
+			if (FALLING_FILLER.contains(inv.getItem(i).getItem())) {
+				n += inv.getItem(i).getCount();
+			}
+		}
+		return n;
+	}
+
+	/**
+	 * Keeps at most one stack of gravel (or sand). Smaller stacks are merged into the biggest one
+	 * and whatever doesn't fit is thrown behind the player.
+	 */
+	private void limitGravel() {
+		LocalPlayer p = player();
 		Inventory inv = p.getInventory();
+		int keep = -1;
+		for (int i = 0; i < 36; i++) {
+			if (FALLING_FILLER.contains(inv.getItem(i).getItem())
+					&& (keep < 0 || inv.getItem(i).getCount() > inv.getItem(keep).getCount())) {
+				keep = i;
+			}
+		}
+		if (keep < 0) {
+			return;
+		}
+		boolean turned = false;
+		for (int i = 0; i < 36; i++) {
+			ItemStack s = inv.getItem(i);
+			if (i == keep || !FALLING_FILLER.contains(s.getItem())) {
+				continue;
+			}
+			if (!turned) {
+				faceBackwards();
+				turned = true;
+			}
+			int id = p.inventoryMenu.containerId;
+			ItemStack kept = inv.getItem(keep);
+			if (s.is(kept.getItem()) && kept.getCount() < kept.getMaxStackSize()) {
+				gameMode().handleContainerInput(id, menuSlot(i), 0, ContainerInput.PICKUP, p);
+				gameMode().handleContainerInput(id, menuSlot(keep), 0, ContainerInput.PICKUP, p);
+				if (!p.inventoryMenu.getCarried().isEmpty()) {
+					gameMode().handleContainerInput(id, menuSlot(i), 0, ContainerInput.PICKUP, p);
+				}
+			}
+			if (FALLING_FILLER.contains(inv.getItem(i).getItem())) {
+				throwStack(i);
+			}
+		}
+		if (turned) {
+			tick();
+		}
+	}
+
+	/**
+	 * When the inventory is nearly full, throws the throwaway blocks (cobblestone, deepslate, dirt,
+	 * ...) behind the player, keeping one stack to bridge gaps and block off lava with.
+	 */
+	private void dropJunk() {
+		if (!cfg.dropJunk || freeSlots() > 3) {
+			return;
+		}
+		faceBackwards();
+		Inventory inv = player().getInventory();
 		boolean keptFiller = false;
 		for (int i = 0; i < 36; i++) {
 			ItemStack s = inv.getItem(i);
@@ -1094,9 +1165,10 @@ public final class StripMineJob {
 				keptFiller = true;
 				continue;
 			}
-			int menuSlot = i < 9 ? 36 + i : i;
-			gameMode().handleInventoryMouseClick(p.inventoryMenu.containerId, menuSlot, 1, ClickType.THROW, p);
+			throwStack(i);
 		}
+		tick();
+	}
 		tick();
 	}
 
@@ -1104,18 +1176,13 @@ public final class StripMineJob {
 	// Crafting full stacks into blocks
 	// ------------------------------------------------------------------------------------------
 
-	/** True if nine of this item craft into something (diamonds -> diamond block, etc.). */
+	/** Items where nine of them craft into one block (the client can't look up recipes itself). */
+	private static final Set<Item> COMPRESSIBLE = Set.of(Items.DIAMOND, Items.EMERALD, Items.IRON_INGOT,
+			Items.RAW_IRON, Items.GOLD_INGOT, Items.RAW_GOLD, Items.COPPER_INGOT, Items.RAW_COPPER, Items.REDSTONE,
+			Items.LAPIS_LAZULI, Items.COAL, Items.IRON_NUGGET, Items.GOLD_NUGGET, Items.NETHERITE_INGOT);
+
 	private boolean canCompress(Item item) {
-		if (JUNK.contains(item)) {
-			return false;
-		}
-		return compressible.computeIfAbsent(item, it -> {
-			Level level = WorldChecks.level();
-			CraftingInput input = CraftingInput.of(3, 3, Collections.nCopies(9, new ItemStack(it)));
-			return level.getRecipeManager().getRecipeFor(RecipeType.CRAFTING, input, level)
-					.map(h -> !h.value().assemble(input, level.registryAccess()).isEmpty())
-					.orElse(false);
-		});
+		return COMPRESSIBLE.contains(item);
 	}
 
 	/** Items that currently have a completely full stack and can be crafted into blocks. */
@@ -1221,23 +1288,23 @@ public final class StripMineJob {
 		int id = menu.containerId;
 		// In the crafting table menu: 0 = result, 1-9 = grid, 10-36 = inventory, 37-45 = hotbar.
 		int slot = invSlot < 9 ? 37 + invSlot : invSlot + 1;
-		gm.handleInventoryMouseClick(id, slot, 0, ClickType.PICKUP, p);
-		gm.handleInventoryMouseClick(id, -999, AbstractContainerMenu.getQuickcraftMask(0, 0), ClickType.QUICK_CRAFT, p);
+		gm.handleContainerInput(id, slot, 0, ContainerInput.PICKUP, p);
+		gm.handleContainerInput(id, -999, AbstractContainerMenu.getQuickcraftMask(0, 0), ContainerInput.QUICK_CRAFT, p);
 		for (int grid = 1; grid <= 9; grid++) {
-			gm.handleInventoryMouseClick(id, grid, AbstractContainerMenu.getQuickcraftMask(1, 0), ClickType.QUICK_CRAFT, p);
+			gm.handleContainerInput(id, grid, AbstractContainerMenu.getQuickcraftMask(1, 0), ContainerInput.QUICK_CRAFT, p);
 		}
-		gm.handleInventoryMouseClick(id, -999, AbstractContainerMenu.getQuickcraftMask(2, 0), ClickType.QUICK_CRAFT, p);
+		gm.handleContainerInput(id, -999, AbstractContainerMenu.getQuickcraftMask(2, 0), ContainerInput.QUICK_CRAFT, p);
 		if (!menu.getCarried().isEmpty()) {
-			gm.handleInventoryMouseClick(id, slot, 0, ClickType.PICKUP, p); // put the leftovers back
+			gm.handleContainerInput(id, slot, 0, ContainerInput.PICKUP, p); // put the leftovers back
 		}
 		tick();
 		tick();
-		gm.handleInventoryMouseClick(id, 0, 0, ClickType.QUICK_MOVE, p);
+		gm.handleContainerInput(id, 0, 0, ContainerInput.QUICK_MOVE, p);
 		tick();
 		// Anything left in the grid goes back to the inventory.
 		for (int grid = 1; grid <= 9; grid++) {
 			if (!menu.getSlot(grid).getItem().isEmpty()) {
-				gm.handleInventoryMouseClick(id, grid, 0, ClickType.QUICK_MOVE, p);
+				gm.handleContainerInput(id, grid, 0, ContainerInput.QUICK_MOVE, p);
 			}
 		}
 		tick();
@@ -1257,7 +1324,7 @@ public final class StripMineJob {
 			if (slot < 0) {
 				return null;
 			}
-			player().getInventory().selected = slot;
+			player().getInventory().setSelectedSlot(slot);
 			Vec3 hit = Vec3.atCenterOf(floor).add(0, 0.5, 0);
 			lookAt(hit);
 			setKey(mc.options.keyShift, true);
@@ -1296,6 +1363,7 @@ public final class StripMineJob {
 		eatIfHungry();
 		if (inMainTunnel) {
 			compressFullStacks();
+			limitGravel();
 			dropJunk();
 			if (freeSlots() == 0) {
 				throw new StopException("Inventory is full. Stopped.");
@@ -1362,7 +1430,7 @@ public final class StripMineJob {
 			throw new StopException("§cHealth is low (" + Math.round(p.getHealth()) + "). Stopped.");
 		}
 		if (++ticks % 10 == 0) {
-			p.displayClientMessage(Component.literal("§6StripMiner:§r " + status()), true);
+			mc.gui.hud.setOverlayMessage(Component.literal("§6StripMiner:§r " + status()), false);
 		}
 	}
 

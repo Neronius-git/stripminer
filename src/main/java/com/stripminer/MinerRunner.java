@@ -109,7 +109,7 @@ public final class MinerRunner {
 		}
 		Minecraft mc = Minecraft.getInstance();
 		if (mc.player != null) {
-			mc.player.displayClientMessage(Component.literal("§6[StripMiner]§r " + text), false);
+			mc.player.sendSystemMessage(Component.literal("§6[StripMiner]§r " + text));
 		}
 	}
 }

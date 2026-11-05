@@ -13,21 +13,20 @@ import net.fabricmc.api.ClientModInitializer;
 import net.fabricmc.fabric.api.client.command.v2.ClientCommandRegistrationCallback;
 import net.fabricmc.fabric.api.client.command.v2.FabricClientCommandSource;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
-import net.fabricmc.fabric.api.client.keybinding.v1.KeyBindingHelper;
+import net.fabricmc.fabric.api.client.keymapping.v1.KeyMappingHelper;
 import net.minecraft.client.KeyMapping;
 import net.minecraft.client.Minecraft;
 import net.minecraft.commands.SharedSuggestionProvider;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.network.chat.Component;
-import net.minecraft.resources.ResourceLocation;
-import org.lwjgl.glfw.GLFW;
+import net.minecraft.resources.Identifier;
 
 import java.util.List;
 import java.util.function.BiConsumer;
 import java.util.function.Function;
 
-import static net.fabricmc.fabric.api.client.command.v2.ClientCommandManager.argument;
-import static net.fabricmc.fabric.api.client.command.v2.ClientCommandManager.literal;
+import static net.fabricmc.fabric.api.client.command.v2.ClientCommands.argument;
+import static net.fabricmc.fabric.api.client.command.v2.ClientCommands.literal;
 
 public final class StripMinerClient implements ClientModInitializer {
 	private static KeyMapping toggleKey;
@@ -35,8 +34,9 @@ public final class StripMinerClient implements ClientModInitializer {
 	@Override
 	public void onInitializeClient() {
 		MinerConfig.get();
-		toggleKey = KeyBindingHelper.registerKeyBinding(new KeyMapping("key.stripminer.toggle",
-				InputConstants.Type.KEYSYM, GLFW.GLFW_KEY_UNKNOWN, "category.stripminer"));
+		KeyMapping.Category category = KeyMapping.Category.register(Identifier.fromNamespaceAndPath("stripminer", "main"));
+		toggleKey = KeyMappingHelper.registerKeyMapping(new KeyMapping("key.stripminer.toggle",
+				InputConstants.Type.KEYBOARD, InputConstants.UNKNOWN.getValue(), category));
 
 		ClientTickEvents.START_CLIENT_TICK.register(MinerRunner::onClientTick);
 		ClientTickEvents.END_CLIENT_TICK.register(mc -> {
@@ -66,7 +66,7 @@ public final class StripMinerClient implements ClientModInitializer {
 	private static final SuggestionProvider<FabricClientCommandSource> ORE_SUGGESTIONS = (ctx, builder) ->
 			SharedSuggestionProvider.suggest(BuiltInRegistries.BLOCK.keySet().stream()
 					.filter(id -> id.getPath().endsWith("_ore") || id.getPath().equals("ancient_debris"))
-					.map(ResourceLocation::toString), builder);
+					.map(Identifier::toString), builder);
 
 	private static final SuggestionProvider<FabricClientCommandSource> CONFIGURED_ORES = (ctx, builder) ->
 			SharedSuggestionProvider.suggest(MinerConfig.get().ores, builder);
@@ -163,8 +163,8 @@ public final class StripMinerClient implements ClientModInitializer {
 				.then(literal("add").then(argument("block", StringArgumentType.greedyString())
 						.suggests(ORE_SUGGESTIONS).executes(ctx -> {
 							String id = normalize(StringArgumentType.getString(ctx, "block"));
-							ResourceLocation rl = ResourceLocation.tryParse(id);
-							if (rl == null || BuiltInRegistries.BLOCK.getOptional(rl).isEmpty()) {
+							Identifier rl = Identifier.tryParse(id);
+							if (rl == null || !BuiltInRegistries.BLOCK.containsKey(rl)) {
 								ctx.getSource().sendError(Component.literal("Unknown block: " + id));
 								return 0;
 							}
