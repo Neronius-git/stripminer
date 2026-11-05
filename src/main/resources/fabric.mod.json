@@ -1,0 +1,21 @@
+{
+	"schemaVersion": 1,
+	"id": "stripminer",
+	"version": "${version}",
+	"name": "Strip Miner",
+	"description": "Automatically strip-mines at a chosen height: 5-block side branches every 6 blocks, mines revealed ore veins, picks up the drops, avoids lava and places torches.",
+	"authors": ["neronius"],
+	"license": "MIT",
+	"icon": "assets/stripminer/icon.png",
+	"environment": "client",
+	"entrypoints": {
+		"client": ["com.stripminer.StripMinerClient"]
+	},
+	"mixins": ["stripminer.mixins.json"],
+	"depends": {
+		"fabricloader": ">=0.20.1",
+		"minecraft": "~26.3",
+		"java": ">=25",
+		"fabric-api": "*"
+	}
+}
