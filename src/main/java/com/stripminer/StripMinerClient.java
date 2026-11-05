@@ -2,6 +2,7 @@ package com.stripminer;
 
 import com.mojang.blaze3d.platform.InputConstants;
 import com.mojang.brigadier.CommandDispatcher;
+import com.mojang.brigadier.arguments.BoolArgumentType;
 import com.mojang.brigadier.arguments.IntegerArgumentType;
 import com.mojang.brigadier.arguments.StringArgumentType;
 import com.mojang.brigadier.context.CommandContext;
@@ -94,7 +95,8 @@ public final class StripMinerClient implements ClientModInitializer {
 					feedback(ctx, "Ores: " + c.ores + " | branch " + c.branchLength + " | spacing "
 							+ c.branchSpacing + " | torch every " + c.torchInterval + " | max length "
 							+ (c.maxTunnelLength == 0 ? "unlimited" : c.maxTunnelLength) + " | vein radius "
-							+ c.veinRadius + " | drop junk " + c.dropJunk);
+							+ c.veinRadius + " | dropJunk " + c.dropJunk + " | compressFullStacks " + c.compressFullStacks
+							+ " | mineAroundOres " + c.mineAroundOres + " | isolateLava " + c.isolateLava);
 					return 1;
 				}))
 				.then(literal("ores")
@@ -142,9 +144,10 @@ public final class StripMinerClient implements ClientModInitializer {
 						.then(intSetting("veinRadius", 1, 16, (c, v) -> c.veinRadius = v))
 						.then(intSetting("eatBelowFood", 0, 19, (c, v) -> c.eatBelowFood = v))
 						.then(intSetting("stopBelowHealth", 0, 19, (c, v) -> c.stopBelowHealth = v))
-						.then(literal("dropJunk")
-								.then(literal("true").executes(ctx -> setBool(ctx, true)))
-								.then(literal("false").executes(ctx -> setBool(ctx, false))))));
+						.then(boolSetting("dropJunk", (c, v) -> c.dropJunk = v))
+						.then(boolSetting("compressFullStacks", (c, v) -> c.compressFullStacks = v))
+						.then(boolSetting("mineAroundOres", (c, v) -> c.mineAroundOres = v))
+						.then(boolSetting("isolateLava", (c, v) -> c.isolateLava = v))));
 	}
 
 	private static com.mojang.brigadier.builder.LiteralArgumentBuilder<FabricClientCommandSource> intSetting(
@@ -159,12 +162,16 @@ public final class StripMinerClient implements ClientModInitializer {
 		}));
 	}
 
-	private static int setBool(CommandContext<FabricClientCommandSource> ctx, boolean v) {
-		MinerConfig c = MinerConfig.get();
-		c.dropJunk = v;
-		c.save();
-		feedback(ctx, "dropJunk set to " + v + ".");
-		return 1;
+	private static com.mojang.brigadier.builder.LiteralArgumentBuilder<FabricClientCommandSource> boolSetting(
+			String name, BiConsumer<MinerConfig, Boolean> setter) {
+		return literal(name).then(argument("value", BoolArgumentType.bool()).executes(ctx -> {
+			boolean v = BoolArgumentType.getBool(ctx, "value");
+			MinerConfig c = MinerConfig.get();
+			setter.accept(c, v);
+			c.save();
+			feedback(ctx, name + " set to " + v + (MinerRunner.isRunning() ? " (takes effect on the next start)" : "") + ".");
+			return 1;
+		}));
 	}
 
 	private static String normalize(String id) {
@@ -188,7 +195,7 @@ public final class StripMinerClient implements ClientModInitializer {
 				"§b/stripmine stop§r - stop",
 				"§b/stripmine status§r - progress and settings",
 				"§b/stripmine ores add|remove|list|clear|reset§r - which ores to mine",
-				"§b/stripmine set <setting> <value>§r - branchLength, branchSpacing, torchInterval, maxLength, veinRadius, eatBelowFood, stopBelowHealth, dropJunk"}) {
+				"§b/stripmine set <setting> <value>§r - branchLength, branchSpacing, torchInterval, maxLength, veinRadius, eatBelowFood, stopBelowHealth, dropJunk, compressFullStacks, mineAroundOres, isolateLava"}) {
 			ctx.getSource().sendFeedback(Component.literal(line));
 		}
 		return 1;

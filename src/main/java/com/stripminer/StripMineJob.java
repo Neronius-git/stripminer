@@ -13,10 +13,15 @@ import net.minecraft.world.InteractionHand;
 import net.minecraft.world.entity.item.FallingBlockEntity;
 import net.minecraft.world.entity.item.ItemEntity;
 import net.minecraft.world.entity.player.Inventory;
+import net.minecraft.world.inventory.AbstractContainerMenu;
 import net.minecraft.world.inventory.ClickType;
+import net.minecraft.world.inventory.CraftingMenu;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
+import net.minecraft.world.item.crafting.CraftingInput;
+import net.minecraft.world.item.crafting.RecipeType;
+import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.state.BlockState;
@@ -26,10 +31,13 @@ import net.minecraft.world.phys.Vec3;
 
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.Collections;
 import java.util.Comparator;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.function.Predicate;
 
@@ -48,8 +56,7 @@ import static com.stripminer.WorldChecks.passable;
  *
  *     LLLLL@RRRRR    branch: 5 left, 5 right (1 wide, 2 high)
  *          |
- *          |         6 blocks forward
- *          |
+ *          |         3 blocks forward
  *     LLLLL@RRRRR
  * </pre>
  *
@@ -78,6 +85,8 @@ public final class StripMineJob {
 	private int oresMined;
 	private int ticks;
 	private boolean warnedNoTorches;
+	private boolean warnedNoTable;
+	private final Map<Item, Boolean> compressible = new HashMap<>();
 	private volatile String phase = "starting";
 	private String lastFailure = "";
 	/** Blocks dug since the last call to {@link #takeCleared()}, used to spot newly revealed ores. */
@@ -199,62 +208,153 @@ public final class StripMineJob {
 
 	/**
 	 * Finds every target ore touching the given open cells (feet and head block), mines each one
-	 * together with the rest of its vein, and collects the drops.
+	 * together with the rest of its vein, and collects the drops. If enabled, every block around a
+	 * mined ore (including diagonals) is dug out too, so no ore can stay hidden behind it.
 	 */
 	private void mineRevealedOres(Collection<BlockPos> feetCells, BlockPos origin) {
 		takeCleared();
 		Set<BlockPos> seen = new HashSet<>();
 		List<BlockPos> pending = new ArrayList<>();
+		Set<BlockPos> probeSeen = new HashSet<>();
+		List<BlockPos> probes = new ArrayList<>();
 		for (BlockPos c : feetCells) {
 			addTouchingOres(c, seen, pending);
 			addTouchingOres(c.above(), seen, pending);
 		}
-		int mined = 0;
-		while (!pending.isEmpty() && mined < 256) {
+		int work = 0;
+		while ((!pending.isEmpty() || !probes.isEmpty()) && work++ < 600) {
 			checkpoint(false);
 			BlockPos me = feet();
-			pending.sort(Comparator.comparingDouble(p -> p.distSqr(me)));
-			BlockPos ore = pending.remove(0);
-			if (!isTarget(ore)) {
-				continue;
-			}
-			if (Math.abs(ore.getX() - origin.getX()) > cfg.veinRadius
-					|| Math.abs(ore.getZ() - origin.getZ()) > cfg.veinRadius
-					|| Math.abs(ore.getY() - origin.getY()) > 6) {
-				continue;
-			}
-			String danger = hazard(ore);
-			if (danger != null) {
-				msg("§cSkipping ore at " + fmt(ore) + " (" + danger + ").");
-				continue;
-			}
-			phase = "going to ore at " + fmt(ore);
-			if (!reachOre(ore, origin)) {
-				msg("Couldn't safely reach the ore at " + fmt(ore) + ", skipping it.");
-				continue;
-			}
-			phase = "mining ore";
-			if (!mineBlock(ore)) {
-				continue;
-			}
-			mined++;
-			oresMined++;
-			collectDrops(ore, origin);
+			if (!pending.isEmpty()) {
+				pending.sort(Comparator.comparingDouble(p -> p.distSqr(me)));
+				BlockPos ore = pending.remove(0);
+				if (!isTarget(ore) || !inRange(ore, origin)) {
+					continue;
+				}
+				if (!prepareOre(ore, origin)) {
+					continue;
+				}
+				phase = "mining ore";
+				if (!mineBlock(ore)) {
+					continue;
+				}
+				oresMined++;
+				if (!WorldChecks.lavaNeighbors(ore).isEmpty() && !feet().equals(ore)) {
+					// Lava found its way in after all: plug the hole before the drops can burn.
+					sealHole(ore);
+				}
+				collectDrops(ore, origin);
 
-			// Follow the vein (including diagonal neighbours) ...
-			for (int dx = -1; dx <= 1; dx++) {
-				for (int dy = -1; dy <= 1; dy++) {
-					for (int dz = -1; dz <= 1; dz++) {
-						BlockPos n = ore.offset(dx, dy, dz);
-						if (seen.add(n) && isTarget(n)) {
-							pending.add(n);
+				for (int dx = -1; dx <= 1; dx++) {
+					for (int dy = -1; dy <= 1; dy++) {
+						for (int dz = -1; dz <= 1; dz++) {
+							BlockPos n = ore.offset(dx, dy, dz);
+							if (isTarget(n)) {
+								if (seen.add(n)) {
+									pending.add(n); // the rest of the vein, diagonals included
+								}
+							} else if (cfg.mineAroundOres && probeSeen.add(n) && !passable(n) && !isTunnelFloor(n, origin)) {
+								probes.add(n); // a block more ore could be hiding behind
+							}
 						}
 					}
 				}
+			} else {
+				probes.sort(Comparator.comparingDouble(p -> p.distSqr(me)));
+				BlockPos probe = probes.remove(0);
+				if (isTarget(probe)) {
+					if (seen.add(probe)) {
+						pending.add(probe);
+					}
+					continue;
+				}
+				if (passable(probe) || !inRange(probe, origin) || hazard(probe) != null) {
+					continue;
+				}
+				phase = "digging around the vein";
+				if (!reach(probe, origin) || !mineBlock(probe)) {
+					continue;
+				}
 			}
-			// ... and pick up anything the path to it revealed.
+			// Anything the digging revealed gets checked too.
 			for (BlockPos c : takeCleared()) {
 				addTouchingOres(c, seen, pending);
+			}
+		}
+	}
+
+	private boolean inRange(BlockPos pos, BlockPos origin) {
+		return Math.abs(pos.getX() - origin.getX()) <= cfg.veinRadius
+				&& Math.abs(pos.getZ() - origin.getZ()) <= cfg.veinRadius
+				&& Math.abs(pos.getY() - origin.getY()) <= 6;
+	}
+
+	/** Don't dig holes into the floor of the tunnel we walk on. */
+	private static boolean isTunnelFloor(BlockPos pos, BlockPos origin) {
+		return pos.getY() == origin.getY() - 1 && passable(pos.above());
+	}
+
+	/**
+	 * Gets the player next to the ore and makes it safe to mine. If the ore touches lava, the lava
+	 * is covered with blocks first (if enabled and possible); otherwise the ore is skipped.
+	 */
+	private boolean prepareOre(BlockPos ore, BlockPos origin) {
+		boolean touchesLava = !WorldChecks.lavaNeighbors(ore).isEmpty();
+		String danger = hazard(ore);
+		if (danger != null && !(touchesLava && cfg.isolateLava && !WorldChecks.lavaBehindFallingBlocks(ore)
+				&& WorldChecks.canMine(ore))) {
+			msg("§cSkipping ore at " + fmt(ore) + " (" + danger + ").");
+			return false;
+		}
+		phase = "going to ore at " + fmt(ore);
+		if (!reach(ore, origin)) {
+			msg("Couldn't safely reach the ore at " + fmt(ore) + ", skipping it.");
+			return false;
+		}
+		if (hazard(ore) != null) {
+			if (!isolateFromLava(ore)) {
+				msg("§cSkipping ore at " + fmt(ore) + ": it touches lava and the lava couldn't be blocked off"
+						+ " (need cobblestone/dirt in the inventory).");
+				return false;
+			}
+			msg("Blocked off the lava next to the ore at " + fmt(ore) + ".");
+		}
+		return true;
+	}
+
+	/** Covers every lava block touching {@code ore} by placing blocks against the ore's sides. */
+	private boolean isolateFromLava(BlockPos ore) {
+		phase = "blocking off lava";
+		for (int round = 0; round < 4; round++) {
+			List<Direction> sides = WorldChecks.lavaNeighbors(ore);
+			for (Direction side : sides) {
+				if (!placeFiller(ore, side)) {
+					return false;
+				}
+			}
+			// Give flowing lava a moment to show whether it comes back.
+			for (int i = 0; i < 10; i++) {
+				tick();
+			}
+			if (hazard(ore) == null) {
+				return true;
+			}
+			if (WorldChecks.lavaBehindFallingBlocks(ore)) {
+				return false;
+			}
+		}
+		return hazard(ore) == null;
+	}
+
+	/** Places a block into an open hole, attached to any solid block next to it. */
+	private void sealHole(BlockPos hole) {
+		for (Direction d : Direction.values()) {
+			BlockPos against = hole.relative(d);
+			if (!passable(against) && !isLava(against)) {
+				placeFiller(against, d.getOpposite());
+				if (!passable(hole)) {
+					return;
+				}
 			}
 		}
 	}
@@ -282,7 +382,8 @@ public final class StripMineJob {
 		return (dy == 0 || dy == 1) && flat == 1;
 	}
 
-	private boolean reachOre(BlockPos ore, BlockPos origin) {
+	/** Moves (digging if needed) to a spot where {@code ore} can be mined and its drop caught. */
+	private boolean reach(BlockPos ore, BlockPos origin) {
 		for (int attempt = 0; attempt < 3; attempt++) {
 			BlockPos me = feet();
 			if (canMineFrom(me, ore)) {
@@ -684,14 +785,14 @@ public final class StripMineJob {
 		tick();
 	}
 
-	/** Places a filler block against the side of {@code against} facing {@code dir}. */
+	/** Places a filler block (cobblestone, dirt, ...) against the side of {@code against} facing {@code dir}. */
 	private boolean placeFiller(BlockPos against, Direction dir) {
 		int slot = ensureInHotbar(s -> FILLER.contains(s.getItem()));
 		if (slot < 0) {
 			return false;
 		}
 		player().getInventory().selected = slot;
-		Vec3 hit = Vec3.atCenterOf(against).add(dir.getStepX() * 0.5, 0, dir.getStepZ() * 0.5);
+		Vec3 hit = Vec3.atCenterOf(against).add(dir.getStepX() * 0.5, dir.getStepY() * 0.5, dir.getStepZ() * 0.5);
 		lookAt(hit);
 		setKey(mc.options.keyShift, true);
 		tick();
@@ -773,11 +874,202 @@ public final class StripMineJob {
 		tick();
 	}
 
+	// ------------------------------------------------------------------------------------------
+	// Crafting full stacks into blocks
+	// ------------------------------------------------------------------------------------------
+
+	/** True if nine of this item craft into something (diamonds -> diamond block, etc.). */
+	private boolean canCompress(Item item) {
+		if (JUNK.contains(item)) {
+			return false;
+		}
+		return compressible.computeIfAbsent(item, it -> {
+			Level level = WorldChecks.level();
+			CraftingInput input = CraftingInput.of(3, 3, Collections.nCopies(9, new ItemStack(it)));
+			return level.getRecipeManager().getRecipeFor(RecipeType.CRAFTING, input, level)
+					.map(h -> !h.value().assemble(input, level.registryAccess()).isEmpty())
+					.orElse(false);
+		});
+	}
+
+	/** Items that currently have a completely full stack and can be crafted into blocks. */
+	private Set<Item> fullCompressibleStacks() {
+		Set<Item> full = new LinkedHashSet<>();
+		Inventory inv = player().getInventory();
+		for (int i = 0; i < 36; i++) {
+			ItemStack s = inv.getItem(i);
+			if (!s.isEmpty() && s.getMaxStackSize() >= 9 && s.getCount() >= s.getMaxStackSize()
+					&& canCompress(s.getItem())) {
+				full.add(s.getItem());
+			}
+		}
+		return full;
+	}
+
+	private boolean hasItem(Item item) {
+		Inventory inv = player().getInventory();
+		for (int i = 0; i < 36; i++) {
+			if (inv.getItem(i).is(item)) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	/**
+	 * When a stack of e.g. diamonds is full: place a crafting table next to the player, craft every
+	 * stack of that item into blocks, then mine the table and pick it back up.
+	 */
+	private void compressFullStacks() {
+		if (!cfg.compressFullStacks) {
+			return;
+		}
+		Set<Item> items = fullCompressibleStacks();
+		if (items.isEmpty()) {
+			return;
+		}
+		if (!hasItem(Items.CRAFTING_TABLE)) {
+			if (!warnedNoTable) {
+				msg("§eA stack is full but there's no crafting table in your inventory, so it can't be crafted into blocks.");
+				warnedNoTable = true;
+			}
+			return;
+		}
+		warnedNoTable = false;
+		phase = "crafting full stacks into blocks";
+		BlockPos table = placeCraftingTable();
+		if (table == null) {
+			return;
+		}
+		try {
+			if (!openCraftingTable(table)) {
+				msg("Couldn't open the crafting table.");
+				return;
+			}
+			for (Item item : items) {
+				for (int tries = 0; tries < 36; tries++) {
+					int slot = findStack(item);
+					if (slot < 0 || !(player().containerMenu instanceof CraftingMenu)) {
+						break;
+					}
+					craftNine(slot);
+				}
+			}
+		} finally {
+			LocalPlayer p = player();
+			if (p.containerMenu != p.inventoryMenu) {
+				p.closeContainer();
+			}
+			tick();
+			phase = "picking the crafting table back up";
+			if (WorldChecks.level().getBlockState(table).is(Blocks.CRAFTING_TABLE) && mineBlock(table)) {
+				AABB area = new AABB(table).inflate(2);
+				for (int i = 0; i < 40; i++) {
+					tick();
+					if (WorldChecks.level().getEntitiesOfClass(ItemEntity.class, area,
+							e -> e.getItem().is(Items.CRAFTING_TABLE)).isEmpty()) {
+						break;
+					}
+				}
+			}
+		}
+	}
+
+	/** Inventory index (0-35) of a stack of {@code item} with at least 9 items, or -1. */
+	private int findStack(Item item) {
+		Inventory inv = player().getInventory();
+		for (int i = 0; i < 36; i++) {
+			ItemStack s = inv.getItem(i);
+			if (s.is(item) && s.getCount() >= 9) {
+				return i;
+			}
+		}
+		return -1;
+	}
+
+	/** Spreads one stack evenly over the 3x3 grid and shift-clicks the result. */
+	private void craftNine(int invSlot) {
+		LocalPlayer p = player();
+		MultiPlayerGameMode gm = gameMode();
+		AbstractContainerMenu menu = p.containerMenu;
+		int id = menu.containerId;
+		// In the crafting table menu: 0 = result, 1-9 = grid, 10-36 = inventory, 37-45 = hotbar.
+		int slot = invSlot < 9 ? 37 + invSlot : invSlot + 1;
+		gm.handleInventoryMouseClick(id, slot, 0, ClickType.PICKUP, p);
+		gm.handleInventoryMouseClick(id, -999, AbstractContainerMenu.getQuickcraftMask(0, 0), ClickType.QUICK_CRAFT, p);
+		for (int grid = 1; grid <= 9; grid++) {
+			gm.handleInventoryMouseClick(id, grid, AbstractContainerMenu.getQuickcraftMask(1, 0), ClickType.QUICK_CRAFT, p);
+		}
+		gm.handleInventoryMouseClick(id, -999, AbstractContainerMenu.getQuickcraftMask(2, 0), ClickType.QUICK_CRAFT, p);
+		if (!menu.getCarried().isEmpty()) {
+			gm.handleInventoryMouseClick(id, slot, 0, ClickType.PICKUP, p); // put the leftovers back
+		}
+		tick();
+		tick();
+		gm.handleInventoryMouseClick(id, 0, 0, ClickType.QUICK_MOVE, p);
+		tick();
+		// Anything left in the grid goes back to the inventory.
+		for (int grid = 1; grid <= 9; grid++) {
+			if (!menu.getSlot(grid).getItem().isEmpty()) {
+				gm.handleInventoryMouseClick(id, grid, 0, ClickType.QUICK_MOVE, p);
+			}
+		}
+		tick();
+	}
+
+	/** Places a crafting table in an open spot next to the player; returns where, or null. */
+	private BlockPos placeCraftingTable() {
+		BlockPos cur = feet();
+		Direction[] sides = {forward.getOpposite(), forward.getCounterClockWise(), forward.getClockWise(), forward};
+		for (Direction d : sides) {
+			BlockPos cell = cur.relative(d);
+			BlockPos floor = cell.below();
+			if (!WorldChecks.level().getBlockState(cell).isAir() || !isSolidFloor(floor) || hazard(cell) != null) {
+				continue;
+			}
+			int slot = ensureInHotbar(st -> st.is(Items.CRAFTING_TABLE));
+			if (slot < 0) {
+				return null;
+			}
+			player().getInventory().selected = slot;
+			Vec3 hit = Vec3.atCenterOf(floor).add(0, 0.5, 0);
+			lookAt(hit);
+			setKey(mc.options.keyShift, true);
+			tick();
+			gameMode().useItemOn(player(), InteractionHand.MAIN_HAND, new BlockHitResult(hit, Direction.UP, floor, false));
+			player().swing(InteractionHand.MAIN_HAND);
+			tick();
+			setKey(mc.options.keyShift, false);
+			tick();
+			if (WorldChecks.level().getBlockState(cell).is(Blocks.CRAFTING_TABLE)) {
+				return cell;
+			}
+		}
+		msg("No room to place a crafting table here.");
+		return null;
+	}
+
+	private boolean openCraftingTable(BlockPos table) {
+		setKey(mc.options.keyShift, false);
+		tick();
+		Vec3 hit = Vec3.atCenterOf(table).add(0, 0.5, 0);
+		lookAt(hit);
+		gameMode().useItemOn(player(), InteractionHand.MAIN_HAND, new BlockHitResult(hit, Direction.UP, table, false));
+		for (int i = 0; i < 20; i++) {
+			tick();
+			if (player().containerMenu instanceof CraftingMenu) {
+				return true;
+			}
+		}
+		return false;
+	}
+
 	/** Housekeeping between steps: tools, food and inventory space. */
 	private void checkpoint(boolean inMainTunnel) {
 		checkTools();
 		eatIfHungry();
 		if (inMainTunnel) {
+			compressFullStacks();
 			dropJunk();
 			if (freeSlots() == 0) {
 				throw new StopException("Inventory is full. Stopped.");

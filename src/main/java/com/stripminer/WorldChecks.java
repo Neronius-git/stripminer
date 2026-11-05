@@ -10,6 +10,7 @@ import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.FallingBlock;
 import net.minecraft.world.level.block.state.BlockState;
 
+import java.util.ArrayList;
 import java.util.List;
 
 /** Read-only questions about blocks around the player. All lava-safety rules live here. */
@@ -85,21 +86,37 @@ public final class WorldChecks {
 		if (!passable(pos) && !canMine(pos)) {
 			return "unbreakable block";
 		}
+		if (!lavaNeighbors(pos).isEmpty()) {
+			return "lava next to " + fmt(pos);
+		}
+		if (lavaBehindFallingBlocks(pos)) {
+			return "lava behind falling blocks above " + fmt(pos);
+		}
+		return null;
+	}
+
+	/** The sides of {@code pos} that touch lava. */
+	public static List<Direction> lavaNeighbors(BlockPos pos) {
+		List<Direction> sides = new ArrayList<>();
 		for (Direction d : Direction.values()) {
 			if (isLava(pos.relative(d))) {
-				return "lava next to " + fmt(pos);
+				sides.add(d);
 			}
 		}
+		return sides;
+	}
+
+	/** True if a column of gravel/sand above {@code pos} touches lava (it would fall when pos is mined). */
+	public static boolean lavaBehindFallingBlocks(BlockPos pos) {
+		Level level = level();
 		BlockPos up = pos.above();
 		for (int i = 0; i < 16 && level.getBlockState(up).getBlock() instanceof FallingBlock; i++) {
-			for (Direction d : Direction.values()) {
-				if (isLava(up.relative(d))) {
-					return "lava behind falling blocks above " + fmt(pos);
-				}
+			if (!lavaNeighbors(up).isEmpty()) {
+				return true;
 			}
 			up = up.above();
 		}
-		return null;
+		return false;
 	}
 
 	/**

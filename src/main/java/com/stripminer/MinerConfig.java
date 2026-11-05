@@ -30,7 +30,7 @@ public final class MinerConfig {
 	/** How many blocks each side branch goes to the left and to the right. */
 	public int branchLength = 5;
 	/** How many blocks the main tunnel moves forward between branches. */
-	public int branchSpacing = 6;
+	public int branchSpacing = 3;
 	/** A torch is placed on the floor of the main tunnel every this many blocks (0 = never). */
 	public int torchInterval = 28;
 	/** Stop after the main tunnel is this long (0 = keep going until stopped). */
@@ -45,6 +45,20 @@ public final class MinerConfig {
 	public int stopBelowHealth = 8;
 	/** Never use a tool that has this much durability left or less, so your pickaxe doesn't break. */
 	public int keepToolDurability = 5;
+	/**
+	 * When a stack of something that can be crafted into a block (diamonds, raw iron, redstone,
+	 * coal, ...) is full, place a crafting table, craft the stacks into blocks and mine the table again.
+	 */
+	public boolean compressFullStacks = true;
+	/**
+	 * After mining an ore, also mine every block around it (including diagonals) in case more ore is
+	 * hidden behind them. Needed on servers with anti-xray; on normal worlds hidden ore is found anyway.
+	 */
+	public boolean mineAroundOres = true;
+	/** Instead of skipping an ore that touches lava, cover the lava with blocks first and then mine it. */
+	public boolean isolateLava = true;
+	/** Used to update old config files. */
+	public int configVersion = 0;
 
 	public static MinerConfig get() {
 		if (instance == null) {
@@ -61,6 +75,11 @@ public final class MinerConfig {
 					if (c.ores == null) {
 						c.ores = new ArrayList<>(DEFAULT_ORES);
 					}
+					if (c.configVersion < 2) {
+						c.branchSpacing = 3; // the old default of 6 was a misunderstanding
+						c.configVersion = 2;
+						c.save();
+					}
 					return c;
 				}
 			} catch (Exception e) {
@@ -68,6 +87,7 @@ public final class MinerConfig {
 			}
 		}
 		MinerConfig c = new MinerConfig();
+		c.configVersion = 2;
 		c.save();
 		return c;
 	}
