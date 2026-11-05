@@ -63,7 +63,7 @@ other side.
 - **Keeps at most one stack of gravel** (or sand) for filling lava. Extra gravel is merged into
   that stack and the rest is thrown away. All other stone-type blocks (cobblestone, deepslate,
   dirt, tuff, ...) are treated as throwaway blocks: when the inventory is almost full it throws
-  them behind it, keeping one stack to bridge gaps and block off lava. It keeps one stack for filling gaps.
+  them behind it, keeping one stack to bridge gaps and block off lava.
 - Moves torches, food and filler blocks from your inventory into the hotbar when needed.
 - Re-mines gravel and sand that falls into the tunnel.
 
