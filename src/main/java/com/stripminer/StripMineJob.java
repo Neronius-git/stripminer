@@ -125,7 +125,9 @@ public final class StripMineJob {
 
 		tunnelLength = 0;
 		lastTorchAt = 0;
-		placeTorchHere();
+		if (cfg.torchInterval > 0) {
+			placeTorchHere();
+		}
 
 		while (true) {
 			if (cfg.maxTunnelLength > 0 && tunnelLength >= cfg.maxTunnelLength) {
@@ -149,6 +151,7 @@ public final class StripMineJob {
 							+ "). Stopped to stay safe. Turn around or pick a new spot and start again.");
 				}
 				segment.add(next);
+				segment.add(next.above());
 				tunnelLength++;
 				if (cfg.torchInterval > 0 && tunnelLength - lastTorchAt >= cfg.torchInterval) {
 					placeTorchHere();
@@ -162,19 +165,25 @@ public final class StripMineJob {
 		}
 	}
 
-	/** Mines one side branch, then the ores it revealed, then walks back to {@code home}. */
+	/** Furthest block that can be mined while standing in the tunnel (survival reach). */
+	static final int MAX_BRANCH_LENGTH = 5;
+
+	/**
+	 * Mines a one block high line at head height to one side while standing still in the main
+	 * tunnel, then mines the ores it revealed and comes back to {@code home}.
+	 */
 	private void branch(BlockPos home, Direction side, String name) {
 		phase = "mining " + name + " branch";
 		List<BlockPos> dug = new ArrayList<>();
-		for (int i = 1; i <= cfg.branchLength; i++) {
+		int length = Math.min(cfg.branchLength, MAX_BRANCH_LENGTH);
+		for (int i = 1; i <= length; i++) {
 			checkpoint(false);
-			BlockPos cur = feet();
-			BlockPos next = cur.relative(side);
-			if (!step(cur, next, true)) {
+			BlockPos block = home.above().relative(side, i);
+			if (!clearBlocks(List.of(block))) {
 				msg("The " + name + " branch was cut short after " + (i - 1) + " blocks: " + lastFailure + ".");
 				break;
 			}
-			dug.add(next);
+			dug.add(block);
 		}
 		phase = "checking " + name + " branch for ores";
 		mineRevealedOres(dug, home);
@@ -208,21 +217,20 @@ public final class StripMineJob {
 	}
 
 	/**
-	 * Finds every target ore touching the given open cells (feet and head block), mines each one
+	 * Finds every target ore touching the given open blocks, mines each one
 	 * together with the rest of its vein, and collects the drops. If enabled, it then digs the
 	 * fewest blocks needed so every block touching the vein (diagonals included) has been seen,
 	 * so no ore of the vein can stay hidden.
 	 */
-	private void mineRevealedOres(Collection<BlockPos> feetCells, BlockPos origin) {
+	private void mineRevealedOres(Collection<BlockPos> openBlocks, BlockPos origin) {
 		takeCleared();
 		placedGravel.clear();
 		Set<BlockPos> seen = new HashSet<>();
 		List<BlockPos> pending = new ArrayList<>();
 		Set<BlockPos> vein = new HashSet<>();
 		Set<BlockPos> failed = new HashSet<>();
-		for (BlockPos c : feetCells) {
+		for (BlockPos c : openBlocks) {
 			addTouchingOres(c, seen, pending);
-			addTouchingOres(c.above(), seen, pending);
 		}
 		int work = 0;
 		while (work++ < 600) {
@@ -694,13 +702,16 @@ public final class StripMineJob {
 	}
 
 	private boolean executePath(List<BlockPos> path) {
-		for (BlockPos next : path) {
+		for (int k = 0; k < path.size(); k++) {
+			BlockPos next = path.get(k);
 			BlockPos cur = feet();
 			int flat = Math.abs(next.getX() - cur.getX()) + Math.abs(next.getZ() - cur.getZ());
 			if (flat != 1 || Math.abs(next.getY() - cur.getY()) > 1) {
 				return false;
 			}
-			if (!step(cur, next, false)) {
+			// Only stop exactly (and sneak) at the end of the path; walk smoothly through the rest.
+			if (!step(cur, next, false, k == path.size() - 1)) {
+				releaseMovement();
 				return false;
 			}
 		}
@@ -714,6 +725,11 @@ public final class StripMineJob {
 	 * cobblestone or similar blocks from the inventory.
 	 */
 	private boolean step(BlockPos cur, BlockPos next, boolean allowBridge) {
+		return step(cur, next, allowBridge, true);
+	}
+
+	/** @param exact stop exactly in the middle of {@code next}; otherwise keep walking through it */
+	private boolean step(BlockPos cur, BlockPos next, boolean allowBridge, boolean exact) {
 		List<BlockPos> req = WorldChecks.required(cur, next);
 		for (BlockPos b : req) {
 			String danger = hazard(b);
@@ -746,7 +762,7 @@ public final class StripMineJob {
 				return false;
 			}
 		}
-		if (!moveTo(Vec3.atBottomCenterOf(next)) || !feet().equals(next)) {
+		if (!moveTo(Vec3.atBottomCenterOf(next), exact) || !feet().equals(next)) {
 			lastFailure = "couldn't walk to " + fmt(next);
 			return false;
 		}
@@ -849,8 +865,18 @@ public final class StripMineJob {
 
 	/** Walks to an exact position (bottom-center of a block), jumping up single steps. */
 	private boolean moveTo(Vec3 target) {
+		return moveTo(target, true);
+	}
+
+	/**
+	 * Walks towards a position (bottom-center of a block), jumping up single steps. With
+	 * {@code exact} it slows down (sneaking) and stops right on the spot; without it, it returns as
+	 * soon as the player is inside the block and keeps walking, for smooth movement along a path.
+	 */
+	private boolean moveTo(Vec3 target, boolean exact) {
 		double best = Double.MAX_VALUE;
 		int stalled = 0;
+		boolean keepWalking = false;
 		try {
 			while (true) {
 				LocalPlayer p = player();
@@ -858,7 +884,9 @@ public final class StripMineJob {
 				double dz = target.z - p.getZ();
 				double dy = target.y - p.getY();
 				double dist = Math.sqrt(dx * dx + dz * dz);
-				if (dist < 0.15 && Math.abs(dy) < 0.4 && p.onGround()) {
+				if (exact ? dist < 0.15 && Math.abs(dy) < 0.4 && p.onGround()
+						: dist < 0.3 && Math.abs(dy) < 0.4 && (p.onGround() || dy > -0.1)) {
+					keepWalking = !exact;
 					return true;
 				}
 				double progress = dist + Math.abs(dy);
@@ -875,13 +903,15 @@ public final class StripMineJob {
 				p.setSprinting(false);
 				setKey(mc.options.keySprint, false);
 				setKey(mc.options.keyUp, dist >= 0.12);
-				// Sneak when close: slows down for precise stopping and never walks off an edge.
-				setKey(mc.options.keyShift, dist < 0.6 && Math.abs(dy) < 0.4);
+				// Sneak when close to the final spot: slows down for a precise stop and never walks off an edge.
+				setKey(mc.options.keyShift, exact && dist < 0.6 && Math.abs(dy) < 0.4);
 				setKey(mc.options.keyJump, dy > 0.5 && p.onGround());
 				tick();
 			}
 		} finally {
-			releaseMovement();
+			if (!keepWalking) {
+				releaseMovement();
+			}
 		}
 	}
 

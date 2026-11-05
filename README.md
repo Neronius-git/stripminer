@@ -1,34 +1,34 @@
 # Strip Miner
 
 A client-side Fabric mod for **Minecraft 26.3** that strip-mines on its own at a height you
-choose, mines the ores it reveals, picks up the drops, avoids lava and lights the tunnel with torches.
+choose, mines the ores it reveals, picks up the drops and avoids lava.
 
 ## What it does
 
 ```
-   LLLLL@RRRRR      @ = main tunnel, L/R = 5-block branches (1 wide, 2 high)
-        |
-        |           3 blocks forward
-   LLLLL@RRRRR
+   side view of a branch          top view
+                                   LLLLL@RRRRR   @ = where the player stands (2 high)
+   LLLLL@RRRRR  <- head height         |         L/R = 1 block high holes at head height
+        @                              |  3 blocks forward
+                                   LLLLL@RRRRR
 ```
 
 1. *(Optional)* Digs a staircase down (or up) to the Y level you pick.
-2. Mines **5 blocks to the left**.
-3. When the whole branch is open, it checks the walls, floor and ceiling for the ores you're
-   looking for. It digs to each ore, mines the **whole vein** (diagonal neighbours too), waits
-   for the drops and walks over to any it didn't pick up, then **walks back to the main tunnel**.
-   Then it makes sure no ore of the vein is still hidden: every block touching the vein
-   (diagonals included) has to have been seen. Instead of digging all 26 blocks around each ore, it
-   digs **only the fewest blocks needed**, picking each time the block that reveals the most
-   unseen spots. Two ores side by side need just a few digs. Turn off with
-   `/config minearoundores false`.
-4. Does the same **5 blocks to the right**.
-5. Mines **3 blocks forward**, checks the new stretch of tunnel for ores, and repeats from step 2.
-6. Places a **torch on the tunnel floor every 28 blocks** (and one at the start).
+2. **Standing still** in the main tunnel, it mines a line of **5 blocks to the left at head
+   height** (only the top block, 1 high).
+3. It checks the blocks around that line for the ores you're looking for. It digs to each ore,
+   mines the **whole vein** (diagonal neighbours too), picks up the drops, then walks back to its
+   spot in the main tunnel.
+4. It **turns right**, mines 5 blocks at head height to the right, and checks for ore the same way.
+5. It mines and walks **3 blocks forward** (2 high), checks that stretch for ore, and repeats from
+   step 2.
 
 It always finishes the 5 blocks before going after ores. For example: mines 3 blocks → sees a
 diamond → mines the last 2 blocks → mines the diamond(s) → goes back to the tunnel → mines the
 other side.
+
+Torches are **off by default**. Turn them on with `/config torchinterval 28` to place one on the
+tunnel floor every 28 blocks.
 
 ### Lava safety
 
@@ -36,7 +36,7 @@ other side.
   That includes lava behind a column of gravel or sand that would fall.
 - It only walks on solid blocks (never magma), so it won't fall into caves or lava pools. Small gaps
   in a branch or the main tunnel are filled with cobblestone or dirt from your inventory.
-- If lava blocks a **branch**, the branch is cut short and mining continues.
+- If lava is next to a **branch** block, the branch is cut short and mining continues.
 - If an **ore** touches lava, it **fills the lava in with gravel or sand** before mining the ore
   (setting `isolatelava`). It digs to a safe spot within reach of the lava and drops gravel/sand
   into it. The gravel sinks to the bottom of the pool and builds pillars upward until no lava
@@ -78,20 +78,21 @@ Stand where you want the tunnel to start and **face the direction to mine**. The
 | `/stripmine stop` | Stop |
 | `/stripmine status` | Show progress |
 
-### Settings: `/config`
+### Settings: `/config` or `/stripmine config`
 
-Type `/config` to see every setting and its value, `/config <setting>` to see one, and
-`/config <setting> <value>` to change one (tab-completion works).
+Type `/config` (or `/stripmine config`) to see every setting and its value,
+`/config <setting>` to see one, and `/config <setting> <value>` to change one
+(tab-completion works). For example `/stripmine config torchinterval 28`.
 
 | Setting | Default | What it does |
 |---|---|---|
-| `branchlength` | 5 | Blocks mined to each side |
+| `branchlength` | 5 | Blocks mined to each side (at most 5, the furthest a player can reach) |
 | `branchspacing` | 3 | Blocks forward between branches |
-| `torchinterval` | 28 | Blocks between floor torches (0 = no torches) |
+| `torchinterval` | 0 | Blocks between floor torches (0 = no torches) |
 | `maxlength` | 0 | Stop after this many tunnel blocks (0 = never) |
-| `veinradius` | 8 | How far from the tunnel it may dig to follow a vein |
+| `veinradius` | 8 | How far (in blocks, sideways from where it stands in the tunnel) it may go to mine ores. Ores further away are left alone, so one big vein can't drag it off forever |
 | `compressfullstacks` | true | Craft full stacks into blocks at a crafting table |
-| `minearoundores` | true | Dig the fewest blocks needed to make sure no ore of a vein is hidden |
+| `minearoundores` | true | After mining a vein, dig the fewest extra blocks needed so every block touching the vein (diagonals too) has been uncovered, in case more ore hides there. Mostly useful on servers with anti-xray; on normal worlds the mod can already see hidden ore |
 | `isolatelava` | true | Fill lava next to an ore with gravel/sand instead of skipping the ore |
 | `collectgravel` | true | Take back gravel pillars that are safe to remove (torch trick) |
 | `dropjunk` | true | Throw away cobblestone/stone/dirt when the inventory is nearly full |
@@ -109,7 +110,7 @@ torches, some food, a crafting table, some cobblestone, and gravel or sand for l
 
 **Tips**
 - Press **F3 + P** to turn off pause-on-lost-focus so it keeps going while you're in another window.
-- The miner doesn't fight mobs. The torches help, but check on it now and then. It stops if your
+- The miner doesn't fight mobs. Check on it now and then (torches are off unless you turn them on). It stops if your
   health gets low.
 - If a server has its own `/config` command, this mod's `/config` hides it while the mod is installed.
 - Some multiplayer servers don't allow automation mods. Check the server rules first.

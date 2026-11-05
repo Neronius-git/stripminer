@@ -77,7 +77,7 @@ public final class StripMinerClient implements ClientModInitializer {
 	}
 
 	private static final List<Option<?>> OPTIONS = List.of(
-			intOpt("branchlength", "blocks mined to each side", 1, 64, c -> c.branchLength, (c, v) -> c.branchLength = v),
+			intOpt("branchlength", "blocks mined to each side (max 5, the reach limit)", 1, 5, c -> c.branchLength, (c, v) -> c.branchLength = v),
 			intOpt("branchspacing", "blocks forward between branches", 2, 64, c -> c.branchSpacing, (c, v) -> c.branchSpacing = v),
 			intOpt("torchinterval", "blocks between floor torches (0 = none)", 0, 256, c -> c.torchInterval, (c, v) -> c.torchInterval = v),
 			intOpt("maxlength", "stop after this many tunnel blocks (0 = never)", 0, 100000, c -> c.maxTunnelLength, (c, v) -> c.maxTunnelLength = v),
@@ -143,8 +143,13 @@ public final class StripMinerClient implements ClientModInitializer {
 					StripMineJob job = MinerRunner.current();
 					feedback(ctx, job == null ? "Not running." : job.status());
 					return 1;
-				})));
+				}))
+				.then(configNode()));
+		d.register(configNode());
+	}
 
+	/** The settings command tree, used for both /config and /stripmine config. */
+	private static LiteralArgumentBuilder<FabricClientCommandSource> configNode() {
 		LiteralArgumentBuilder<FabricClientCommandSource> config = literal("config").executes(ctx -> {
 			feedback(ctx, "Settings (change with §b/config <name> <value>§r):");
 			MinerConfig c = MinerConfig.get();
@@ -194,7 +199,7 @@ public final class StripMinerClient implements ClientModInitializer {
 					c.save();
 					return listOres(ctx);
 				})));
-		d.register(config);
+		return config;
 	}
 
 	private static String normalize(String id) {
@@ -217,7 +222,7 @@ public final class StripMinerClient implements ClientModInitializer {
 				"§b/stripmine start [y]§r - start mining in the direction you face (digs stairs to Y first if given)",
 				"§b/stripmine stop§r - stop",
 				"§b/stripmine status§r - progress and settings",
-				"§b/config§r - list all settings",
+				"§b/config§r or §b/stripmine config§r - list all settings",
 				"§b/config <setting> <value>§r - change a setting, e.g. /config compressfullstacks false",
 				"§b/config ores add|remove|list|clear|reset§r - which ores to mine"}) {
 			ctx.getSource().sendFeedback(Component.literal(line));

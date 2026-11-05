@@ -27,12 +27,12 @@ public final class MinerConfig {
 
 	/** Blocks to search for and mine when they are revealed. */
 	public List<String> ores = new ArrayList<>(DEFAULT_ORES);
-	/** How many blocks each side branch goes to the left and to the right. */
+	/** How many blocks each side branch goes to the left and to the right (at most 5: the player's reach). */
 	public int branchLength = 5;
 	/** How many blocks the main tunnel moves forward between branches. */
 	public int branchSpacing = 3;
 	/** A torch is placed on the floor of the main tunnel every this many blocks (0 = never). */
-	public int torchInterval = 28;
+	public int torchInterval = 0;
 	/** Stop after the main tunnel is this long (0 = keep going until stopped). */
 	public int maxTunnelLength = 0;
 	/** How far (horizontally) the miner may dig away from the tunnel to follow an ore vein. */
@@ -79,7 +79,15 @@ public final class MinerConfig {
 					}
 					if (c.configVersion < 2) {
 						c.branchSpacing = 3; // the old default of 6 was a misunderstanding
-						c.configVersion = 2;
+					}
+					if (c.configVersion < 3) {
+						if (c.torchInterval == 28) {
+							c.torchInterval = 0; // torches are now off by default
+						}
+						c.branchLength = Math.min(c.branchLength, 5);
+					}
+					if (c.configVersion < 3) {
+						c.configVersion = 3;
 						c.save();
 					}
 					return c;
@@ -89,7 +97,7 @@ public final class MinerConfig {
 			}
 		}
 		MinerConfig c = new MinerConfig();
-		c.configVersion = 2;
+		c.configVersion = 3;
 		c.save();
 		return c;
 	}
