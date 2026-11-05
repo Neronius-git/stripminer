@@ -66,11 +66,13 @@ import static com.stripminer.WorldChecks.passable;
  */
 public final class StripMineJob {
 	private static final Set<Item> JUNK = Set.of(Items.COBBLESTONE, Items.COBBLED_DEEPSLATE, Items.STONE,
-			Items.DEEPSLATE, Items.DIRT, Items.GRAVEL, Items.ANDESITE, Items.DIORITE, Items.GRANITE, Items.TUFF,
+			Items.DEEPSLATE, Items.DIRT, Items.ANDESITE, Items.DIORITE, Items.GRANITE, Items.TUFF,
 			Items.NETHERRACK, Items.CALCITE, Items.FLINT, Items.SMOOTH_BASALT, Items.BASALT, Items.BLACKSTONE);
 	private static final Set<Item> FILLER = Set.of(Items.COBBLESTONE, Items.COBBLED_DEEPSLATE, Items.STONE,
 			Items.DEEPSLATE, Items.DIRT, Items.ANDESITE, Items.DIORITE, Items.GRANITE, Items.TUFF, Items.NETHERRACK,
 			Items.BLACKSTONE);
+	/** Blocks that fall: dropped into lava they sink and fill the pool from the bottom. */
+	private static final Set<Item> FALLING_FILLER = Set.of(Items.GRAVEL, Items.SAND, Items.RED_SAND);
 	private static final Set<Item> BAD_FOOD = Set.of(Items.ROTTEN_FLESH, Items.SPIDER_EYE, Items.POISONOUS_POTATO,
 			Items.PUFFERFISH, Items.CHORUS_FRUIT, Items.SUSPICIOUS_STEW, Items.CHICKEN);
 
@@ -91,6 +93,8 @@ public final class StripMineJob {
 	private String lastFailure = "";
 	/** Blocks dug since the last call to {@link #takeCleared()}, used to spot newly revealed ores. */
 	private final List<BlockPos> cleared = new ArrayList<>();
+	/** Where gravel/sand was dropped into lava, so the pillars can be collected again. */
+	private final List<BlockPos> placedGravel = new ArrayList<>();
 
 	public StripMineJob(MinerConfig cfg, Integer targetY) {
 		this.cfg = cfg;
@@ -108,7 +112,7 @@ public final class StripMineJob {
 	void run() {
 		targets = cfg.resolveOres();
 		if (targets.isEmpty()) {
-			throw new StopException("No valid ores configured. Use /stripmine ores add <block>.");
+			throw new StopException("No valid ores configured. Use /config ores add <block>.");
 		}
 		forward = player().getDirection();
 		checkTools();
@@ -208,21 +212,23 @@ public final class StripMineJob {
 
 	/**
 	 * Finds every target ore touching the given open cells (feet and head block), mines each one
-	 * together with the rest of its vein, and collects the drops. If enabled, every block around a
-	 * mined ore (including diagonals) is dug out too, so no ore can stay hidden behind it.
+	 * together with the rest of its vein, and collects the drops. If enabled, it then digs the
+	 * fewest blocks needed so every block touching the vein (diagonals included) has been seen,
+	 * so no ore of the vein can stay hidden.
 	 */
 	private void mineRevealedOres(Collection<BlockPos> feetCells, BlockPos origin) {
 		takeCleared();
+		placedGravel.clear();
 		Set<BlockPos> seen = new HashSet<>();
 		List<BlockPos> pending = new ArrayList<>();
-		Set<BlockPos> probeSeen = new HashSet<>();
-		List<BlockPos> probes = new ArrayList<>();
+		Set<BlockPos> vein = new HashSet<>();
+		Set<BlockPos> failed = new HashSet<>();
 		for (BlockPos c : feetCells) {
 			addTouchingOres(c, seen, pending);
 			addTouchingOres(c.above(), seen, pending);
 		}
 		int work = 0;
-		while ((!pending.isEmpty() || !probes.isEmpty()) && work++ < 600) {
+		while (work++ < 600) {
 			checkpoint(false);
 			BlockPos me = feet();
 			if (!pending.isEmpty()) {
@@ -239,41 +245,29 @@ public final class StripMineJob {
 					continue;
 				}
 				oresMined++;
+				vein.add(ore);
 				if (!WorldChecks.lavaNeighbors(ore).isEmpty() && !feet().equals(ore)) {
 					// Lava found its way in after all: plug the hole before the drops can burn.
 					sealHole(ore);
 				}
 				collectDrops(ore, origin);
-
-				for (int dx = -1; dx <= 1; dx++) {
-					for (int dy = -1; dy <= 1; dy++) {
-						for (int dz = -1; dz <= 1; dz++) {
-							BlockPos n = ore.offset(dx, dy, dz);
-							if (isTarget(n)) {
-								if (seen.add(n)) {
-									pending.add(n); // the rest of the vein, diagonals included
-								}
-							} else if (cfg.mineAroundOres && probeSeen.add(n) && !passable(n) && !isTunnelFloor(n, origin)) {
-								probes.add(n); // a block more ore could be hiding behind
-							}
-						}
+				// The rest of the vein that is already visible, diagonals included.
+				for (BlockPos n : around(ore)) {
+					if (isTarget(n) && seen.add(n)) {
+						pending.add(n);
 					}
 				}
 			} else {
-				probes.sort(Comparator.comparingDouble(p -> p.distSqr(me)));
-				BlockPos probe = probes.remove(0);
-				if (isTarget(probe)) {
-					if (seen.add(probe)) {
-						pending.add(probe);
-					}
-					continue;
+				if (!cfg.mineAroundOres || vein.isEmpty()) {
+					break;
 				}
-				if (passable(probe) || !inRange(probe, origin) || hazard(probe) != null) {
-					continue;
+				BlockPos dig = bestRevealBlock(vein, origin, failed);
+				if (dig == null) {
+					break; // every block that could hide more of this vein has been seen
 				}
-				phase = "digging around the vein";
-				if (!reach(probe, origin) || !mineBlock(probe)) {
-					continue;
+				phase = "checking around the vein";
+				if (!reach(dig, origin) || !mineBlock(dig)) {
+					failed.add(dig);
 				}
 			}
 			// Anything the digging revealed gets checked too.
@@ -281,6 +275,80 @@ public final class StripMineJob {
 				addTouchingOres(c, seen, pending);
 			}
 		}
+		recoverGravel(origin);
+	}
+
+	/** The 26 blocks around {@code pos} (sides, edges and corners). */
+	private static List<BlockPos> around(BlockPos pos) {
+		List<BlockPos> list = new ArrayList<>(26);
+		for (int dx = -1; dx <= 1; dx++) {
+			for (int dy = -1; dy <= 1; dy++) {
+				for (int dz = -1; dz <= 1; dz++) {
+					if (dx != 0 || dy != 0 || dz != 0) {
+						list.add(pos.offset(dx, dy, dz));
+					}
+				}
+			}
+		}
+		return list;
+	}
+
+	/** A block counts as seen if it is open or touches an open block on one of its sides. */
+	private static boolean isSeen(BlockPos pos) {
+		if (passable(pos)) {
+			return true;
+		}
+		for (Direction d : Direction.values()) {
+			if (passable(pos.relative(d))) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	/**
+	 * Picks the one block whose removal reveals the most still-unseen blocks around the vein.
+	 * Removing a block reveals itself and its 6 side neighbours, so for two ores side by side only
+	 * a handful of digs are needed instead of every block around them.
+	 */
+	private BlockPos bestRevealBlock(Set<BlockPos> vein, BlockPos origin, Set<BlockPos> failed) {
+		Set<BlockPos> unseen = new HashSet<>();
+		for (BlockPos ore : vein) {
+			for (BlockPos n : around(ore)) {
+				if (!vein.contains(n) && inRange(n, origin) && !isTarget(n) && !isSeen(n)) {
+					unseen.add(n);
+				}
+			}
+		}
+		if (unseen.isEmpty()) {
+			return null;
+		}
+		Map<BlockPos, Integer> score = new HashMap<>();
+		for (BlockPos c : unseen) {
+			score.merge(c, 1, Integer::sum);
+			for (Direction d : Direction.values()) {
+				score.merge(c.relative(d), 1, Integer::sum);
+			}
+		}
+		BlockPos me = feet();
+		BlockPos best = null;
+		int bestScore = 0;
+		double bestDist = 0;
+		for (Map.Entry<BlockPos, Integer> e : score.entrySet()) {
+			BlockPos p = e.getKey();
+			if (failed.contains(p) || passable(p) || !WorldChecks.canMine(p) || hazard(p) != null
+					|| isTunnelFloor(p, origin) || !inRange(p, origin)) {
+				continue;
+			}
+			int s = e.getValue();
+			double dist = p.distSqr(me);
+			if (s > bestScore || (s == bestScore && dist < bestDist)) {
+				best = p;
+				bestScore = s;
+				bestDist = dist;
+			}
+		}
+		return best;
 	}
 
 	private boolean inRange(BlockPos pos, BlockPos origin) {
@@ -296,13 +364,17 @@ public final class StripMineJob {
 
 	/**
 	 * Gets the player next to the ore and makes it safe to mine. If the ore touches lava, the lava
-	 * is covered with blocks first (if enabled and possible); otherwise the ore is skipped.
+	 * is filled in first (if enabled and possible); otherwise the ore is skipped.
 	 */
 	private boolean prepareOre(BlockPos ore, BlockPos origin) {
 		boolean touchesLava = !WorldChecks.lavaNeighbors(ore).isEmpty();
-		String danger = hazard(ore);
-		if (danger != null && !(touchesLava && cfg.isolateLava && !WorldChecks.lavaBehindFallingBlocks(ore)
-				&& WorldChecks.canMine(ore))) {
+		// Gravel above the ore that touches lava is fine: when the ore is mined the gravel just
+		// slides down into the hole and keeps blocking the lava.
+		String danger = touchesLava ? "lava next to " + fmt(ore) : WorldChecks.hazard(ore);
+		if (danger != null && danger.startsWith("lava behind falling")) {
+			danger = null;
+		}
+		if (danger != null && !(touchesLava && cfg.isolateLava && WorldChecks.canMine(ore))) {
 			msg("§cSkipping ore at " + fmt(ore) + " (" + danger + ").");
 			return false;
 		}
@@ -311,39 +383,76 @@ public final class StripMineJob {
 			msg("Couldn't safely reach the ore at " + fmt(ore) + ", skipping it.");
 			return false;
 		}
-		if (hazard(ore) != null) {
-			if (!isolateFromLava(ore)) {
-				msg("§cSkipping ore at " + fmt(ore) + ": it touches lava and the lava couldn't be blocked off"
-						+ " (need cobblestone/dirt in the inventory).");
+		if (!WorldChecks.lavaNeighbors(ore).isEmpty()) {
+			if (!fillLavaAround(ore, origin)) {
+				msg("§cSkipping ore at " + fmt(ore) + ": it touches lava that couldn't be filled in"
+						+ " (need gravel, sand, cobblestone or dirt).");
 				return false;
 			}
-			msg("Blocked off the lava next to the ore at " + fmt(ore) + ".");
+			msg("Filled in the lava next to the ore at " + fmt(ore) + ".");
 		}
 		return true;
 	}
 
-	/** Covers every lava block touching {@code ore} by placing blocks against the ore's sides. */
-	private boolean isolateFromLava(BlockPos ore) {
-		phase = "blocking off lava";
-		for (int round = 0; round < 4; round++) {
+	/**
+	 * Fills every lava block touching {@code ore}. Gravel/sand is used first: dropped into a lava
+	 * pool it sinks to the bottom and builds a pillar up, so the pool fills from below until the
+	 * lava next to the ore is gone. Cobblestone/dirt is used when there is no gravel or sand.
+	 */
+	private boolean fillLavaAround(BlockPos ore, BlockPos origin) {
+		phase = "filling lava with gravel";
+		for (int round = 0; round < 64; round++) {
 			List<Direction> sides = WorldChecks.lavaNeighbors(ore);
-			for (Direction side : sides) {
-				if (!placeFiller(ore, side)) {
-					return false;
+			if (sides.isEmpty()) {
+				// Give flowing lava a moment to show whether it comes back.
+				for (int i = 0; i < 10; i++) {
+					tick();
 				}
+				if (WorldChecks.lavaNeighbors(ore).isEmpty()) {
+					return true;
+				}
+				continue;
 			}
-			// Give flowing lava a moment to show whether it comes back.
-			for (int i = 0; i < 10; i++) {
-				tick();
+			Direction side = sides.get(0);
+			BlockPos lava = ore.relative(side);
+			if (!placeBlockInto(lava, ore, side, origin)) {
+				return false;
 			}
-			if (hazard(ore) == null) {
-				return true;
-			}
-			if (WorldChecks.lavaBehindFallingBlocks(ore)) {
+			waitForFallingBlocks(lava);
+		}
+		return WorldChecks.lavaNeighbors(ore).isEmpty();
+	}
+
+	/** Places gravel/sand (or filler) into {@code target} by clicking the {@code face} of {@code against}. */
+	private boolean placeBlockInto(BlockPos target, BlockPos against, Direction face, BlockPos origin) {
+		Vec3 hit = Vec3.atCenterOf(against).add(face.getStepX() * 0.5, face.getStepY() * 0.5, face.getStepZ() * 0.5);
+		if (player().getEyePosition().distanceTo(hit) > 4.0) {
+			// Dig up to the lava pool until it is within reach.
+			List<BlockPos> path = PathFinder.find(feet(),
+					c -> Vec3.atBottomCenterOf(c).add(0, 1.62, 0).distanceTo(hit) <= 4.0,
+					target, origin, cfg.veinRadius + 2, 8);
+			if (path == null || !executePath(path)) {
 				return false;
 			}
 		}
-		return hazard(ore) == null;
+		boolean gravel = placeFiller(against, face, true);
+		if (!gravel && !placeFiller(against, face, false)) {
+			return false;
+		}
+		if (gravel) {
+			placedGravel.add(target.immutable());
+		}
+		return true;
+	}
+
+	private void waitForFallingBlocks(BlockPos near) {
+		AABB box = new AABB(near).inflate(1, 24, 1);
+		for (int i = 0; i < 40; i++) {
+			tick();
+			if (WorldChecks.level().getEntitiesOfClass(FallingBlockEntity.class, box).isEmpty()) {
+				return;
+			}
+		}
 	}
 
 	/** Places a block into an open hole, attached to any solid block next to it. */
@@ -351,12 +460,129 @@ public final class StripMineJob {
 		for (Direction d : Direction.values()) {
 			BlockPos against = hole.relative(d);
 			if (!passable(against) && !isLava(against)) {
-				placeFiller(against, d.getOpposite());
+				if (!placeFiller(against, d.getOpposite(), false)) {
+					placeFiller(against, d.getOpposite(), true);
+				}
 				if (!passable(hole)) {
 					return;
 				}
 			}
 		}
+	}
+
+	// ------------------------------------------------------------------------------------------
+	// Getting gravel back (torch trick)
+	// ------------------------------------------------------------------------------------------
+
+	private static boolean isGravelLike(BlockPos pos) {
+		BlockState s = WorldChecks.level().getBlockState(pos);
+		return s.is(Blocks.GRAVEL) || s.is(Blocks.SAND) || s.is(Blocks.RED_SAND);
+	}
+
+	/**
+	 * Takes back the gravel/sand pillars built in lava. A pillar is only taken if no block of it
+	 * touches lava, so removing it can't let lava flow. The bottom block is mined and a torch is
+	 * placed in its spot straight away: the rest of the pillar falls onto the torch and pops off
+	 * as items. Then the torch is picked up again.
+	 */
+	private void recoverGravel(BlockPos origin) {
+		if (placedGravel.isEmpty()) {
+			return;
+		}
+		List<BlockPos> placed = new ArrayList<>(placedGravel);
+		placedGravel.clear();
+		if (!cfg.collectGravel) {
+			return;
+		}
+		Set<BlockPos> bottoms = new LinkedHashSet<>();
+		for (BlockPos p : placed) {
+			// The gravel sank through the lava: look down for where the pillar ended up.
+			BlockPos b = p;
+			for (int k = 0; k < 32 && !isGravelLike(b) && (isLava(b) || passable(b)); k++) {
+				b = b.below();
+			}
+			if (!isGravelLike(b)) {
+				continue;
+			}
+			while (isGravelLike(b.below())) {
+				b = b.below();
+			}
+			bottoms.add(b);
+		}
+		int left = 0;
+		for (BlockPos bottom : bottoms) {
+			checkpoint(false);
+			if (!isGravelLike(bottom)) {
+				continue;
+			}
+			if (hazard(bottom) != null || !isSolidFloor(bottom.below())) {
+				left++; // taking it would let lava flow (or there's nothing to put a torch on)
+				continue;
+			}
+			phase = "collecting gravel";
+			List<BlockPos> path = PathFinder.find(feet(), c -> {
+				int dy = bottom.getY() - c.getY();
+				int flat = Math.abs(bottom.getX() - c.getX()) + Math.abs(bottom.getZ() - c.getZ());
+				return (dy == 0 || dy == 1) && flat == 1;
+			}, bottom, origin, cfg.veinRadius + 2, 8);
+			if (path == null || !executePath(path) || !collectPillar(bottom)) {
+				left++;
+			}
+		}
+		if (left > 0) {
+			msg("Left " + left + " gravel pillar(s) in the lava pool; taking them would let the lava flow.");
+		}
+	}
+
+	private boolean collectPillar(BlockPos bottom) {
+		int torch = ensureInHotbar(s -> s.is(Items.TORCH));
+		if (torch < 0) {
+			msg("§eNo torches to collect the gravel with.");
+			return false;
+		}
+		for (int i = 0; i < 300; i++) {
+			if (isGravelLike(bottom)) {
+				if (hazard(bottom) != null || !mineBlock(bottom)) {
+					return false;
+				}
+				placeTorchOn(bottom, torch); // no tick in between: the torch must be there first
+			} else if (WorldChecks.level().getBlockState(bottom).isAir() && isGravelLike(bottom.above())) {
+				placeTorchOn(bottom, torch);
+			}
+			tick();
+			if (!isGravelLike(bottom) && !isGravelLike(bottom.above())
+					&& WorldChecks.level().getEntitiesOfClass(FallingBlockEntity.class, new AABB(bottom).inflate(1, 24, 1)).isEmpty()) {
+				break;
+			}
+		}
+		AABB area = new AABB(bottom).inflate(1.5);
+		for (int i = 0; i < 40; i++) {
+			tick();
+			if (WorldChecks.level().getEntitiesOfClass(ItemEntity.class, area).isEmpty()) {
+				break;
+			}
+		}
+		if (WorldChecks.level().getBlockState(bottom).is(Blocks.TORCH)) {
+			Direction face = faceTowardsEyes(bottom);
+			lookAt(Vec3.atCenterOf(bottom));
+			gameMode().startDestroyBlock(bottom, face);
+			for (int i = 0; i < 20; i++) {
+				tick();
+				if (WorldChecks.level().getEntitiesOfClass(ItemEntity.class, area).isEmpty()) {
+					break;
+				}
+			}
+		}
+		return true;
+	}
+
+	private void placeTorchOn(BlockPos cell, int torchSlot) {
+		BlockPos floor = cell.below();
+		player().getInventory().selected = torchSlot;
+		Vec3 hit = Vec3.atCenterOf(floor).add(0, 0.5, 0);
+		lookAt(hit);
+		gameMode().useItemOn(player(), InteractionHand.MAIN_HAND, new BlockHitResult(hit, Direction.UP, floor, false));
+		player().swing(InteractionHand.MAIN_HAND);
 	}
 
 	private void addTouchingOres(BlockPos open, Set<BlockPos> seen, List<BlockPos> pending) {
@@ -517,7 +743,7 @@ public final class StripMineJob {
 		if (needBridge && !isSolidFloor(floor)) {
 			Direction dir = next.getX() > cur.getX() ? Direction.EAST : next.getX() < cur.getX() ? Direction.WEST
 					: next.getZ() > cur.getZ() ? Direction.SOUTH : Direction.NORTH;
-			if (!placeFiller(cur.below(), dir) || !isSolidFloor(floor)) {
+			if (!placeFiller(cur.below(), dir, false) || !isSolidFloor(floor)) {
 				lastFailure = "gap in the floor at " + fmt(floor) + " and no cobblestone/dirt to fill it";
 				return false;
 			}
@@ -786,8 +1012,8 @@ public final class StripMineJob {
 	}
 
 	/** Places a filler block (cobblestone, dirt, ...) against the side of {@code against} facing {@code dir}. */
-	private boolean placeFiller(BlockPos against, Direction dir) {
-		int slot = ensureInHotbar(s -> FILLER.contains(s.getItem()));
+	private boolean placeFiller(BlockPos against, Direction dir, boolean gravelOrSand) {
+		int slot = ensureInHotbar(s -> (gravelOrSand ? FALLING_FILLER : FILLER).contains(s.getItem()));
 		if (slot < 0) {
 			return false;
 		}

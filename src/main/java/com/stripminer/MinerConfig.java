@@ -51,12 +51,14 @@ public final class MinerConfig {
 	 */
 	public boolean compressFullStacks = true;
 	/**
-	 * After mining an ore, also mine every block around it (including diagonals) in case more ore is
-	 * hidden behind them. Needed on servers with anti-xray; on normal worlds hidden ore is found anyway.
+	 * After mining a vein, dig the fewest blocks needed so that every block touching the vein
+	 * (diagonals included) has been seen, so no ore of the vein stays hidden.
 	 */
 	public boolean mineAroundOres = true;
-	/** Instead of skipping an ore that touches lava, cover the lava with blocks first and then mine it. */
+	/** Instead of skipping an ore that touches lava, fill the lava with gravel/sand first and then mine it. */
 	public boolean isolateLava = true;
+	/** Afterwards, take back the gravel pillars that can be removed without letting lava flow (torch trick). */
+	public boolean collectGravel = true;
 	/** Used to update old config files. */
 	public int configVersion = 0;
 
