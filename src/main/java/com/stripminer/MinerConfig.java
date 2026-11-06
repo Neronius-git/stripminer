@@ -36,7 +36,7 @@ public final class MinerConfig {
 	/** Stop after the main tunnel is this long (0 = keep going until stopped). */
 	public int maxTunnelLength = 0;
 	/** How far (horizontally) the miner may dig away from the tunnel to follow an ore vein. */
-	public int veinRadius = 8;
+	public int veinRadius = 10;
 	/** Throw away cobblestone/deepslate/dirt etc. when the inventory is almost full. */
 	public boolean dropJunk = true;
 	/** Eat when the hunger bar drops to this value or below (out of 20). */
@@ -86,8 +86,11 @@ public final class MinerConfig {
 						}
 						c.branchLength = Math.min(c.branchLength, 5);
 					}
-					if (c.configVersion < 3) {
-						c.configVersion = 3;
+					if (c.configVersion < 4 && c.veinRadius == 8) {
+						c.veinRadius = 10; // new default
+					}
+					if (c.configVersion < 4) {
+						c.configVersion = 4;
 						c.save();
 					}
 					return c;
@@ -97,7 +100,7 @@ public final class MinerConfig {
 			}
 		}
 		MinerConfig c = new MinerConfig();
-		c.configVersion = 3;
+		c.configVersion = 4;
 		c.save();
 		return c;
 	}

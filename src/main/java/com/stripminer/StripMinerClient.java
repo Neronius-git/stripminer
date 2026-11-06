@@ -6,6 +6,7 @@ import com.mojang.brigadier.arguments.ArgumentType;
 import com.mojang.brigadier.arguments.BoolArgumentType;
 import com.mojang.brigadier.arguments.IntegerArgumentType;
 import com.mojang.brigadier.arguments.StringArgumentType;
+import com.mojang.brigadier.builder.ArgumentBuilder;
 import com.mojang.brigadier.builder.LiteralArgumentBuilder;
 import com.mojang.brigadier.context.CommandContext;
 import com.mojang.brigadier.suggestion.SuggestionProvider;
@@ -14,6 +15,7 @@ import net.fabricmc.fabric.api.client.command.v2.ClientCommandRegistrationCallba
 import net.fabricmc.fabric.api.client.command.v2.FabricClientCommandSource;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
 import net.fabricmc.fabric.api.client.keymapping.v1.KeyMappingHelper;
+import net.fabricmc.loader.api.FabricLoader;
 import net.minecraft.client.KeyMapping;
 import net.minecraft.client.Minecraft;
 import net.minecraft.commands.SharedSuggestionProvider;
@@ -21,13 +23,21 @@ import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.network.chat.Component;
 import net.minecraft.resources.Identifier;
 
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
+import java.util.Map;
 import java.util.function.BiConsumer;
 import java.util.function.Function;
 
 import static net.fabricmc.fabric.api.client.command.v2.ClientCommands.argument;
 import static net.fabricmc.fabric.api.client.command.v2.ClientCommands.literal;
 
+/**
+ * Key binding and chat commands. Every command accepts {@code help} in place of a value, e.g.
+ * {@code /stripmine start help} or {@code /stripmine config settings veinradius help}.
+ */
 public final class StripMinerClient implements ClientModInitializer {
 	private static KeyMapping toggleKey;
 
@@ -44,69 +54,105 @@ public final class StripMinerClient implements ClientModInitializer {
 				if (MinerRunner.isRunning()) {
 					MinerRunner.stop("Stopped.");
 				} else {
-					startMining(null);
+					startMining(null, null);
 				}
 			}
 		});
 		ClientCommandRegistrationCallback.EVENT.register((dispatcher, registryAccess) -> register(dispatcher));
 	}
 
-	private static void startMining(Integer y) {
+	static String version() {
+		return FabricLoader.getInstance().getModContainer("stripminer")
+				.map(c -> c.getMetadata().getVersion().getFriendlyString()).orElse("?");
+	}
+
+	private static void startMining(Integer y, Goal goal) {
 		Minecraft mc = Minecraft.getInstance();
 		if (mc.player == null) {
 			return;
 		}
-		if (MinerRunner.start(new StripMineJob(MinerConfig.get(), y))) {
-			MinerRunner.sendChat("Started" + (y != null ? " (target Y=" + y + ")" : "") + ".");
+		if (MinerRunner.start(new StripMineJob(MinerConfig.get(), y, goal))) {
+			MinerRunner.sendChat("Started" + (y != null ? " (target Y=" + y + ")" : "")
+					+ (goal != null ? " - goal: " + goal.describe() : "") + ".");
 		} else {
 			MinerRunner.sendChat("Already running. Use /stripmine stop first.");
 		}
 	}
 
-	private static final SuggestionProvider<FabricClientCommandSource> ORE_SUGGESTIONS = (ctx, builder) ->
-			SharedSuggestionProvider.suggest(BuiltInRegistries.BLOCK.keySet().stream()
-					.filter(id -> id.getPath().endsWith("_ore") || id.getPath().equals("ancient_debris"))
-					.map(Identifier::toString), builder);
+	// ------------------------------------------------------------------------------------------
+	// Settings
+	// ------------------------------------------------------------------------------------------
 
-	private static final SuggestionProvider<FabricClientCommandSource> CONFIGURED_ORES = (ctx, builder) ->
-			SharedSuggestionProvider.suggest(MinerConfig.get().ores, builder);
-
-	/** A setting that can be changed with /config. */
-	private record Option<T>(String name, String help, Function<MinerConfig, T> get, BiConsumer<MinerConfig, T> set,
-			ArgumentType<T> type, Class<T> cls) {
+	/** A setting. {@code tunnel} settings live under "config settings", the rest directly under "config". */
+	private record Option<T>(String name, boolean tunnel, String range, String help, Function<MinerConfig, T> get,
+			BiConsumer<MinerConfig, T> set, ArgumentType<T> type, Class<T> cls) {
+		String usage() {
+			return "/stripmine config " + (tunnel ? "settings " : "") + name + " <" + range + ">";
+		}
 	}
 
-	private static final List<Option<?>> OPTIONS = List.of(
-			intOpt("branchlength", "blocks mined to each side (max 5, the reach limit)", 1, 5, c -> c.branchLength, (c, v) -> c.branchLength = v),
-			intOpt("branchspacing", "blocks forward between branches", 2, 64, c -> c.branchSpacing, (c, v) -> c.branchSpacing = v),
-			intOpt("torchinterval", "blocks between floor torches (0 = none)", 0, 256, c -> c.torchInterval, (c, v) -> c.torchInterval = v),
-			intOpt("maxlength", "stop after this many tunnel blocks (0 = never)", 0, 100000, c -> c.maxTunnelLength, (c, v) -> c.maxTunnelLength = v),
-			intOpt("veinradius", "how far from the tunnel it follows a vein", 1, 16, c -> c.veinRadius, (c, v) -> c.veinRadius = v),
-			intOpt("eatbelowfood", "eat when hunger is at or below this (of 20)", 0, 19, c -> c.eatBelowFood, (c, v) -> c.eatBelowFood = v),
-			intOpt("stopbelowhealth", "stop when health is at or below this (of 20)", 0, 19, c -> c.stopBelowHealth, (c, v) -> c.stopBelowHealth = v),
-			intOpt("keeptooldurability", "never use a tool with this much durability left or less", 0, 100, c -> c.keepToolDurability, (c, v) -> c.keepToolDurability = v),
-			boolOpt("dropjunk", "throw away cobblestone/stone/dirt when the inventory is nearly full", c -> c.dropJunk, (c, v) -> c.dropJunk = v),
-			boolOpt("compressfullstacks", "craft full stacks into blocks at a crafting table", c -> c.compressFullStacks, (c, v) -> c.compressFullStacks = v),
-			boolOpt("minearoundores", "dig the fewest blocks needed to make sure no ore of a vein is hidden", c -> c.mineAroundOres, (c, v) -> c.mineAroundOres = v),
-			boolOpt("isolatelava", "fill lava next to an ore with gravel/sand instead of skipping the ore", c -> c.isolateLava, (c, v) -> c.isolateLava = v),
-			boolOpt("collectgravel", "take back gravel pillars that are safe to remove (torch trick)", c -> c.collectGravel, (c, v) -> c.collectGravel = v));
+	private static final MinerConfig DEFAULTS = new MinerConfig();
 
-	private static Option<Integer> intOpt(String name, String help, int min, int max,
+	private static final List<Option<?>> OPTIONS = List.of(
+			intOpt("branchlength", true, 1, 5, "How many blocks each side branch goes to the left and to the right"
+					+ " (a one block high line at head height). At most 5: the furthest a player can reach while"
+					+ " standing still.", c -> c.branchLength, (c, v) -> c.branchLength = v),
+			intOpt("branchspacing", true, 2, 64, "How many blocks the main tunnel moves forward between two pairs"
+					+ " of branches.", c -> c.branchSpacing, (c, v) -> c.branchSpacing = v),
+			intOpt("torchinterval", true, 0, 256, "Place a torch on the tunnel floor every this many blocks."
+					+ " 0 = no torches.", c -> c.torchInterval, (c, v) -> c.torchInterval = v),
+			intOpt("maxlength", true, 0, 100000, "Always stop once the main tunnel is this long. 0 = no limit."
+					+ " For a one-off limit use /stripmine start length <blocks> instead.",
+					c -> c.maxTunnelLength, (c, v) -> c.maxTunnelLength = v),
+			intOpt("veinradius", true, 1, 16, "How far (in blocks, sideways from its spot in the main tunnel) it"
+					+ " may go to mine ore. Ore further away is left alone, so one big vein can't drag it off forever.",
+					c -> c.veinRadius, (c, v) -> c.veinRadius = v),
+			boolOpt("minearoundores", "After mining a vein, dig the fewest extra blocks needed so every block"
+					+ " touching the vein (diagonals too) has been uncovered, in case more ore hides there. Mostly"
+					+ " useful on servers with anti-xray; on normal worlds the mod can already see hidden ore.",
+					c -> c.mineAroundOres, (c, v) -> c.mineAroundOres = v),
+			boolOpt("isolatelava", "When an ore touches lava, fill the lava in with gravel/sand (or cobblestone)"
+					+ " and then mine the ore, instead of skipping it.", c -> c.isolateLava, (c, v) -> c.isolateLava = v),
+			boolOpt("collectgravel", "After filling lava, take back the gravel pillars that don't touch lava"
+					+ " (mine the bottom block, put a torch there, collect the falling gravel).",
+					c -> c.collectGravel, (c, v) -> c.collectGravel = v),
+			boolOpt("compressfullstacks", "When a stack of diamonds, raw iron, redstone, ... is full, place a"
+					+ " crafting table, craft the stacks into blocks and pick the table back up.",
+					c -> c.compressFullStacks, (c, v) -> c.compressFullStacks = v),
+			boolOpt("dropjunk", "When the inventory is nearly full, throw away cobblestone, deepslate, dirt and"
+					+ " other stone (one stack is kept for bridging gaps and blocking lava).",
+					c -> c.dropJunk, (c, v) -> c.dropJunk = v),
+			intOpt("eatbelowfood", false, 0, 19, "Eat when the hunger bar is at or below this (out of 20).",
+					c -> c.eatBelowFood, (c, v) -> c.eatBelowFood = v),
+			intOpt("stopbelowhealth", false, 0, 19, "Stop when health is at or below this (out of 20).",
+					c -> c.stopBelowHealth, (c, v) -> c.stopBelowHealth = v),
+			intOpt("keeptooldurability", false, 0, 100, "Never use a tool with this much durability left or"
+					+ " less, so your pickaxe never breaks.", c -> c.keepToolDurability, (c, v) -> c.keepToolDurability = v));
+
+	private static Option<Integer> intOpt(String name, boolean tunnel, int min, int max, String help,
 			Function<MinerConfig, Integer> get, BiConsumer<MinerConfig, Integer> set) {
-		return new Option<>(name, help, get, set, IntegerArgumentType.integer(min, max), Integer.class);
+		return new Option<>(name, tunnel, min + "-" + max, help, get, set, IntegerArgumentType.integer(min, max), Integer.class);
 	}
 
 	private static Option<Boolean> boolOpt(String name, String help,
 			Function<MinerConfig, Boolean> get, BiConsumer<MinerConfig, Boolean> set) {
-		return new Option<>(name, help, get, set, BoolArgumentType.bool(), Boolean.class);
+		return new Option<>(name, false, "true|false", help, get, set, BoolArgumentType.bool(), Boolean.class);
+	}
+
+	private static <T> List<String> optionHelp(Option<T> opt) {
+		return List.of("§6" + opt.name() + "§r - " + opt.help(),
+				"Usage: §b" + opt.usage(),
+				"Current value: §b" + opt.get().apply(MinerConfig.get()) + "§r, default: " + opt.get().apply(DEFAULTS));
 	}
 
 	private static <T> LiteralArgumentBuilder<FabricClientCommandSource> optionNode(Option<T> opt) {
 		return literal(opt.name())
 				.executes(ctx -> {
-					feedback(ctx, opt.name() + " = §b" + opt.get().apply(MinerConfig.get()) + "§r (" + opt.help() + ")");
+					feedback(ctx, opt.name() + " = §b" + opt.get().apply(MinerConfig.get()) + "§r (type §b"
+							+ opt.usage().replace("<" + opt.range() + ">", "help") + "§r for details)");
 					return 1;
 				})
+				.then(helpNode(() -> optionHelp(opt)))
 				.then(argument("value", opt.type()).executes(ctx -> {
 					T v = ctx.getArgument("value", opt.cls());
 					MinerConfig c = MinerConfig.get();
@@ -118,55 +164,256 @@ public final class StripMinerClient implements ClientModInitializer {
 				}));
 	}
 
+	// ------------------------------------------------------------------------------------------
+	// Help texts
+	// ------------------------------------------------------------------------------------------
+
+	private static final Map<String, List<String>> HELP = new LinkedHashMap<>();
+
+	static {
+		HELP.put("start", List.of(
+				"§6start§r - start strip mining in the direction you are facing.",
+				"§b/stripmine start§r - mine at your current height until stopped",
+				"§b/stripmine start <y>§r - first dig stairs to height Y (e.g. -58 for diamonds)",
+				"Add a goal to stop by itself (also after a Y): §btime§r, §bores§r, §bitems§r or §blength§r,",
+				"e.g. §b/stripmine start time 30m§r, §b/stripmine start -58 ores 20§r.",
+				"Type §b/stripmine start time help§r etc. for each goal."));
+		HELP.put("time", List.of(
+				"§6start time <duration>§r - stop after mining this long.",
+				"Duration like §b30m§r, §b1h30m§r, §b90s§r, or just a number of minutes (§b45§r).",
+				"Example: §b/stripmine start time 1h"));
+		HELP.put("ores", List.of(
+				"§6start ores <count>§r - stop after mining this many ore blocks (of the ores in /stripmine config ores).",
+				"Example: §b/stripmine start ores 20"));
+		HELP.put("items", List.of(
+				"§6start items <count>§r - stop after picking up this many items from mined ores",
+				"(e.g. diamonds, raw iron - counts Fortune drops too).",
+				"Example: §b/stripmine start items 64"));
+		HELP.put("length", List.of(
+				"§6start length <blocks>§r - stop once the main tunnel is this long.",
+				"Example: §b/stripmine start length 200"));
+		HELP.put("stop", List.of("§6stop§r - stop mining right away. Your settings stay as they are."));
+		HELP.put("status", List.of("§6status§r - show run time, tunnel length, ores and items mined, and what it is doing now."));
+		HELP.put("config", List.of(
+				"§6config§r - change how the miner works. §b/stripmine config§r lists everything.",
+				"§b/stripmine config settings <name> <value>§r - tunnel shape: branchlength, branchspacing,"
+						+ " torchinterval, maxlength, veinradius",
+				"§b/stripmine config <name> <value>§r - behaviour: minearoundores, isolatelava, collectgravel,"
+						+ " compressfullstacks, dropjunk, eatbelowfood, stopbelowhealth, keeptooldurability",
+				"§b/stripmine config ores ...§r - which ores to look for",
+				"Put §bhelp§r after any setting to see what it does, e.g. §b/stripmine config settings veinradius help"));
+		HELP.put("settings", List.of(
+				"§6config settings§r - the shape of the tunnel:",
+				"§bbranchlength§r, §bbranchspacing§r, §btorchinterval§r, §bmaxlength§r, §bveinradius",
+				"Usage: §b/stripmine config settings <name> <value>§r, or §b... <name> help§r to learn more."));
+		HELP.put("orelist", List.of(
+				"§6config ores§r - which blocks the miner looks for (default: diamond ore and deepslate diamond ore).",
+				"§b/stripmine config ores list§r - show the list",
+				"§b/stripmine config ores add <block>§r - add one, e.g. minecraft:ancient_debris (tab-completes)",
+				"§b/stripmine config ores remove <block>§r - remove one",
+				"§b/stripmine config ores clear§r / §breset§r - empty the list / back to diamonds"));
+		HELP.put("help", List.of(
+				"§6help§r - type §bhelp§r after any command instead of a value to see how it works,",
+				"e.g. §b/stripmine start help§r, §b/stripmine config settings veinradius help§r.",
+				"§b/stripmine help <topic>§r works too."));
+	}
+
+	private static List<String> overview() {
+		List<String> lines = new ArrayList<>();
+		lines.add("§6Strip Miner v" + version() + "§r - commands (put §bhelp§r after any of them for details):");
+		lines.add("§b/stripmine start [y] [time|ores|items|length <value>]§r - start mining");
+		lines.add("§b/stripmine stop§r - stop");
+		lines.add("§b/stripmine status§r - progress");
+		lines.add("§b/stripmine config§r - all settings (§bsettings§r for tunnel shape, §bores§r for the ore list)");
+		lines.add("§b/stripmine help <topic>§r - topics: start, time, ores, items, length, stop, status, config,"
+				+ " settings, orelist, or any setting name");
+		return lines;
+	}
+
+	private static void sendLines(CommandContext<FabricClientCommandSource> ctx, List<String> lines) {
+		for (int i = 0; i < lines.size(); i++) {
+			ctx.getSource().sendFeedback(Component.literal(i == 0 ? "§6[StripMiner]§r " + lines.get(i) : "  " + lines.get(i)));
+		}
+	}
+
+	private static LiteralArgumentBuilder<FabricClientCommandSource> helpNode(java.util.function.Supplier<List<String>> text) {
+		return literal("help").executes(ctx -> {
+			sendLines(ctx, text.get());
+			return 1;
+		});
+	}
+
+	private static LiteralArgumentBuilder<FabricClientCommandSource> helpNode(String topic) {
+		return helpNode(() -> HELP.get(topic));
+	}
+
+	private static List<String> helpFor(String topic) {
+		topic = topic.trim().toLowerCase(Locale.ROOT);
+		if (HELP.containsKey(topic)) {
+			return HELP.get(topic);
+		}
+		for (Option<?> opt : OPTIONS) {
+			if (opt.name().equals(topic)) {
+				return optionHelp(opt);
+			}
+		}
+		return List.of("No help for '" + topic + "'. Try §b/stripmine help§r for the list of topics.");
+	}
+
+	// ------------------------------------------------------------------------------------------
+	// Command tree
+	// ------------------------------------------------------------------------------------------
+
+	private static final SuggestionProvider<FabricClientCommandSource> ORE_SUGGESTIONS = (ctx, builder) ->
+			SharedSuggestionProvider.suggest(BuiltInRegistries.BLOCK.keySet().stream()
+					.filter(id -> id.getPath().endsWith("_ore") || id.getPath().equals("ancient_debris"))
+					.map(Identifier::toString), builder);
+
+	private static final SuggestionProvider<FabricClientCommandSource> CONFIGURED_ORES = (ctx, builder) ->
+			SharedSuggestionProvider.suggest(MinerConfig.get().ores, builder);
+
+	private static final SuggestionProvider<FabricClientCommandSource> HELP_TOPICS = (ctx, builder) -> {
+		List<String> topics = new ArrayList<>(HELP.keySet());
+		OPTIONS.forEach(o -> topics.add(o.name()));
+		return SharedSuggestionProvider.suggest(topics, builder);
+	};
+
 	private static void register(CommandDispatcher<FabricClientCommandSource> d) {
-		d.register(literal("stripmine")
-				.executes(StripMinerClient::help)
-				.then(literal("help").executes(StripMinerClient::help))
-				.then(literal("start")
-						.executes(ctx -> {
-							startMining(null);
-							return 1;
-						})
-						.then(argument("y", IntegerArgumentType.integer(-63, 319)).executes(ctx -> {
-							startMining(IntegerArgumentType.getInteger(ctx, "y"));
-							return 1;
-						})))
-				.then(literal("stop").executes(ctx -> {
-					if (MinerRunner.isRunning()) {
-						MinerRunner.stop("Stopped.");
-					} else {
-						feedback(ctx, "Not running.");
-					}
-					return 1;
-				}))
-				.then(literal("status").executes(ctx -> {
-					StripMineJob job = MinerRunner.current();
-					feedback(ctx, job == null ? "Not running." : job.status());
-					return 1;
-				}))
-				.then(configNode()));
+		d.register(mainNode("stripmine"));
 		d.register(configNode());
 	}
 
-	/** The settings command tree, used for both /config and /stripmine config. */
+	private static LiteralArgumentBuilder<FabricClientCommandSource> mainNode(String name) {
+		return literal(name)
+				.executes(ctx -> {
+					sendLines(ctx, overview());
+					return 1;
+				})
+				.then(literal("help")
+						.executes(ctx -> {
+							sendLines(ctx, overview());
+							return 1;
+						})
+						.then(argument("topic", StringArgumentType.greedyString()).suggests(HELP_TOPICS).executes(ctx -> {
+							sendLines(ctx, helpFor(StringArgumentType.getString(ctx, "topic")));
+							return 1;
+						})))
+				.then(withGoals(literal("start"), false)
+						.executes(ctx -> {
+							startMining(null, null);
+							return 1;
+						})
+						.then(helpNode("start"))
+						.then(withGoals(argument("y", IntegerArgumentType.integer(-63, 319)), true).executes(ctx -> {
+							startMining(IntegerArgumentType.getInteger(ctx, "y"), null);
+							return 1;
+						})))
+				.then(literal("stop")
+						.executes(ctx -> {
+							if (MinerRunner.isRunning()) {
+								MinerRunner.stop("Stopped.");
+							} else {
+								feedback(ctx, "Not running.");
+							}
+							return 1;
+						})
+						.then(helpNode("stop")))
+				.then(literal("status")
+						.executes(ctx -> {
+							StripMineJob job = MinerRunner.current();
+							feedback(ctx, job == null ? "Not running." : job.status());
+							return 1;
+						})
+						.then(helpNode("status")))
+				.then(configNode());
+	}
+
+	/** Adds the goal sub-commands (time/ores/items/length) under a start node. */
+	private static <T extends ArgumentBuilder<FabricClientCommandSource, T>> T withGoals(T node, boolean hasY) {
+		return node
+				.then(literal("time")
+						.then(helpNode("time"))
+						.then(argument("duration", StringArgumentType.word()).executes(ctx -> {
+							String text = StringArgumentType.getString(ctx, "duration");
+							long ticks = Goal.parseDuration(text);
+							if (ticks <= 0) {
+								ctx.getSource().sendError(Component.literal("Can't read '" + text
+										+ "' as a time. Use e.g. 30m, 1h30m, 90s or a number of minutes."));
+								return 0;
+							}
+							startMining(y(ctx, hasY), new Goal(Goal.Type.TIME, ticks));
+							return 1;
+						})))
+				.then(goalNode("ores", Goal.Type.ORES, "count", hasY))
+				.then(goalNode("items", Goal.Type.ITEMS, "count", hasY))
+				.then(goalNode("length", Goal.Type.LENGTH, "blocks", hasY));
+	}
+
+	private static LiteralArgumentBuilder<FabricClientCommandSource> goalNode(String name, Goal.Type type, String arg, boolean hasY) {
+		return literal(name)
+				.then(helpNode(name))
+				.then(argument(arg, IntegerArgumentType.integer(1)).executes(ctx -> {
+					startMining(y(ctx, hasY), new Goal(type, IntegerArgumentType.getInteger(ctx, arg)));
+					return 1;
+				}));
+	}
+
+	private static Integer y(CommandContext<FabricClientCommandSource> ctx, boolean hasY) {
+		return hasY ? IntegerArgumentType.getInteger(ctx, "y") : null;
+	}
+
+	/** The settings command tree, used for /config and /stripmine config. */
 	private static LiteralArgumentBuilder<FabricClientCommandSource> configNode() {
 		LiteralArgumentBuilder<FabricClientCommandSource> config = literal("config").executes(ctx -> {
-			feedback(ctx, "Settings (change with §b/config <name> <value>§r):");
 			MinerConfig c = MinerConfig.get();
+			List<String> lines = new ArrayList<>();
+			lines.add("Settings (put §bhelp§r after a name to learn what it does):");
+			lines.add("§7Tunnel - /stripmine config settings <name> <value>:");
 			for (Option<?> opt : OPTIONS) {
-				ctx.getSource().sendFeedback(Component.literal(" §b" + opt.name() + "§r = " + opt.get().apply(c) + " §7- " + opt.help()));
+				if (opt.tunnel()) {
+					lines.add(" §b" + opt.name() + "§r = " + opt.get().apply(c));
+				}
 			}
-			ctx.getSource().sendFeedback(Component.literal(" §bores§r = " + String.join(", ", c.ores) + " §7- /config ores add|remove|list|clear|reset"));
+			lines.add("§7Behaviour - /stripmine config <name> <value>:");
+			for (Option<?> opt : OPTIONS) {
+				if (!opt.tunnel()) {
+					lines.add(" §b" + opt.name() + "§r = " + opt.get().apply(c));
+				}
+			}
+			lines.add("§7Ores - /stripmine config ores add|remove|list|clear|reset:");
+			lines.add(" " + String.join(", ", c.ores));
+			sendLines(ctx, lines);
 			return 1;
-		});
+		}).then(helpNode("config"));
+
+		LiteralArgumentBuilder<FabricClientCommandSource> settings = literal("settings").executes(ctx -> {
+			MinerConfig c = MinerConfig.get();
+			List<String> lines = new ArrayList<>();
+			lines.add("Tunnel settings (change with §b/stripmine config settings <name> <value>§r):");
+			for (Option<?> opt : OPTIONS) {
+				if (opt.tunnel()) {
+					lines.add(" §b" + opt.name() + "§r = " + opt.get().apply(c));
+				}
+			}
+			sendLines(ctx, lines);
+			return 1;
+		}).then(helpNode("settings"));
 		for (Option<?> opt : OPTIONS) {
-			config.then(optionNode(opt));
+			if (opt.tunnel()) {
+				settings.then(optionNode(opt));
+			} else {
+				config.then(optionNode(opt));
+			}
 		}
+		config.then(settings);
+
 		config.then(literal("ores")
 				.executes(ctx -> listOres(ctx))
-				.then(literal("list").executes(ctx -> listOres(ctx)))
-				.then(literal("add").then(argument("block", StringArgumentType.greedyString())
-						.suggests(ORE_SUGGESTIONS).executes(ctx -> {
+				.then(helpNode("orelist"))
+				.then(literal("list").executes(ctx -> listOres(ctx)).then(helpNode("orelist")))
+				.then(literal("add")
+						.then(helpNode("orelist"))
+						.then(argument("block", StringArgumentType.greedyString()).suggests(ORE_SUGGESTIONS).executes(ctx -> {
 							String id = normalize(StringArgumentType.getString(ctx, "block"));
 							Identifier rl = Identifier.tryParse(id);
 							if (rl == null || !BuiltInRegistries.BLOCK.containsKey(rl)) {
@@ -180,8 +427,9 @@ public final class StripMinerClient implements ClientModInitializer {
 							}
 							return listOres(ctx);
 						})))
-				.then(literal("remove").then(argument("block", StringArgumentType.greedyString())
-						.suggests(CONFIGURED_ORES).executes(ctx -> {
+				.then(literal("remove")
+						.then(helpNode("orelist"))
+						.then(argument("block", StringArgumentType.greedyString()).suggests(CONFIGURED_ORES).executes(ctx -> {
 							MinerConfig c = MinerConfig.get();
 							c.ores.remove(normalize(StringArgumentType.getString(ctx, "block")));
 							c.save();
@@ -192,18 +440,18 @@ public final class StripMinerClient implements ClientModInitializer {
 					c.ores.clear();
 					c.save();
 					return listOres(ctx);
-				}))
+				}).then(helpNode("orelist")))
 				.then(literal("reset").executes(ctx -> {
 					MinerConfig c = MinerConfig.get();
-					c.ores = new java.util.ArrayList<>(MinerConfig.DEFAULT_ORES);
+					c.ores = new ArrayList<>(MinerConfig.DEFAULT_ORES);
 					c.save();
 					return listOres(ctx);
-				})));
+				}).then(helpNode("orelist"))));
 		return config;
 	}
 
 	private static String normalize(String id) {
-		id = id.trim().toLowerCase(java.util.Locale.ROOT);
+		id = id.trim().toLowerCase(Locale.ROOT);
 		return id.contains(":") ? id : "minecraft:" + id;
 	}
 
@@ -214,19 +462,5 @@ public final class StripMinerClient implements ClientModInitializer {
 
 	private static void feedback(CommandContext<FabricClientCommandSource> ctx, String text) {
 		ctx.getSource().sendFeedback(Component.literal("§6[StripMiner]§r " + text));
-	}
-
-	private static int help(CommandContext<FabricClientCommandSource> ctx) {
-		feedback(ctx, "Commands:");
-		for (String line : new String[] {
-				"§b/stripmine start [y]§r - start mining in the direction you face (digs stairs to Y first if given)",
-				"§b/stripmine stop§r - stop",
-				"§b/stripmine status§r - progress and settings",
-				"§b/config§r or §b/stripmine config§r - list all settings",
-				"§b/config <setting> <value>§r - change a setting, e.g. /config compressfullstacks false",
-				"§b/config ores add|remove|list|clear|reset§r - which ores to mine"}) {
-			ctx.getSource().sendFeedback(Component.literal(line));
-		}
-		return 1;
 	}
 }

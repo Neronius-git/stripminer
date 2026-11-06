@@ -83,7 +83,11 @@ public final class StripMineJob {
 	private int tunnelLength;
 	private int lastTorchAt;
 	private int oresMined;
-	private int ticks;
+	/** Items (diamonds, raw iron, ...) picked up from the ores that were mined. */
+	private int resources;
+	/** Game ticks since the start (20 per second). */
+	private long ticks;
+	private final Goal goal;
 	private boolean warnedNoTorches;
 	private boolean warnedNoTable;
 	private volatile String phase = "starting";
@@ -93,13 +97,39 @@ public final class StripMineJob {
 	/** Where gravel/sand was dropped into lava, so the pillars can be collected again. */
 	private final List<BlockPos> placedGravel = new ArrayList<>();
 
-	public StripMineJob(MinerConfig cfg, Integer targetY) {
+	public StripMineJob(MinerConfig cfg, Integer targetY, Goal goal) {
 		this.cfg = cfg;
 		this.targetY = targetY;
+		this.goal = goal;
 	}
 
 	public String status() {
-		return phase + " | tunnel " + tunnelLength + " blocks | " + oresMined + " ores mined";
+		return "§e" + Goal.formatTicks(ticks) + "§r running, §b" + tunnelLength + "§r blocks of tunnel, §a"
+				+ oresMined + "§r ores mined (§a" + resources + "§r items), now " + phase
+				+ (goal != null ? ". Goal: " + goal.describe() : "");
+	}
+
+	/** Action bar: run time, tunnel length, ores (items) - each in its own colour. */
+	private String actionBar() {
+		return "§eTime " + Goal.formatTicks(ticks) + "   §bTunnel " + tunnelLength + "   §aOres " + oresMined
+				+ " (" + resources + ")";
+	}
+
+	/** Stops the run once its goal is reached. */
+	private void checkGoal() {
+		if (goal == null) {
+			return;
+		}
+		boolean done = switch (goal.type()) {
+			case TIME -> ticks >= goal.amount();
+			case ORES -> oresMined >= goal.amount();
+			case ITEMS -> resources >= goal.amount();
+			case LENGTH -> tunnelLength >= goal.amount();
+		};
+		if (done) {
+			throw new StopException("§aGoal reached (" + goal.describe() + "): " + Goal.formatTicks(ticks)
+					+ ", tunnel " + tunnelLength + ", " + oresMined + " ores (" + resources + " items).");
+		}
 	}
 
 	// ------------------------------------------------------------------------------------------
@@ -114,7 +144,7 @@ public final class StripMineJob {
 		forward = player().getDirection();
 		checkTools();
 		msg("Strip mining towards §b" + forward.getName() + "§r, looking for " + cfg.ores
-				+ ". Use §b/stripmine stop§r to stop.");
+				+ (goal != null ? ". Goal: " + goal.describe() : "") + ". Use §b/stripmine stop§r to stop.");
 
 		phase = "centering";
 		moveTo(Vec3.atBottomCenterOf(feet()));
@@ -130,6 +160,7 @@ public final class StripMineJob {
 		}
 
 		while (true) {
+			checkGoal();
 			if (cfg.maxTunnelLength > 0 && tunnelLength >= cfg.maxTunnelLength) {
 				msg("Reached the tunnel length limit of " + cfg.maxTunnelLength + " blocks. Mined " + oresMined + " ores.");
 				return;
@@ -179,6 +210,9 @@ public final class StripMineJob {
 		for (int i = 1; i <= length; i++) {
 			checkpoint(false);
 			BlockPos block = home.above().relative(side, i);
+			if (isTarget(block)) {
+				continue; // leave ore in the line for the ore logic, so its drops get picked up
+			}
 			if (!clearBlocks(List.of(block))) {
 				msg("The " + name + " branch was cut short after " + (i - 1) + " blocks: " + lastFailure + ".");
 				break;
@@ -186,6 +220,7 @@ public final class StripMineJob {
 			dug.add(block);
 		}
 		phase = "checking " + name + " branch for ores";
+		dug.add(home.above());
 		mineRevealedOres(dug, home);
 		phase = "returning to tunnel";
 		returnTo(home);
@@ -246,6 +281,7 @@ public final class StripMineJob {
 					continue;
 				}
 				phase = "mining ore";
+				Map<Item, Integer> before = countResources();
 				if (!mineBlock(ore)) {
 					continue;
 				}
@@ -256,6 +292,7 @@ public final class StripMineJob {
 					sealHole(ore);
 				}
 				collectDrops(ore, origin);
+				resources += gained(before, countResources());
 				// The rest of the vein that is already visible, diagonals included.
 				for (BlockPos n : around(ore)) {
 					if (isTarget(n) && seen.add(n)) {
@@ -902,9 +939,17 @@ public final class StripMineJob {
 				p.setXRot(20f);
 				p.setSprinting(false);
 				setKey(mc.options.keySprint, false);
-				setKey(mc.options.keyUp, dist >= 0.12);
-				// Sneak when close to the final spot: slows down for a precise stop and never walks off an edge.
-				setKey(mc.options.keyShift, exact && dist < 0.6 && Math.abs(dy) < 0.4);
+				setKey(mc.options.keyShift, false);
+				boolean braking = exact && dist < 0.6 && Math.abs(dy) < 0.4 && p.onGround();
+				if (braking) {
+					// Close to the final spot: let go of the key and ease in, so it stops right on it.
+					setKey(mc.options.keyUp, false);
+					double speed = Math.min(0.12, dist * 0.5);
+					Vec3 v = p.getDeltaMovement();
+					p.setDeltaMovement(dx / Math.max(dist, 1e-4) * speed, v.y, dz / Math.max(dist, 1e-4) * speed);
+				} else {
+					setKey(mc.options.keyUp, dist >= 0.12);
+				}
 				setKey(mc.options.keyJump, dy > 0.5 && p.onGround());
 				tick();
 			}
@@ -1049,7 +1094,6 @@ public final class StripMineJob {
 		player().getInventory().setSelectedSlot(slot);
 		Vec3 hit = Vec3.atCenterOf(against).add(dir.getStepX() * 0.5, dir.getStepY() * 0.5, dir.getStepZ() * 0.5);
 		lookAt(hit);
-		setKey(mc.options.keyShift, true);
 		tick();
 		MinerRunner.onMain(() -> gameMode().useItemOn(player(), InteractionHand.MAIN_HAND, new BlockHitResult(hit, dir, against, false)));
 		swingHand();
@@ -1090,6 +1134,30 @@ public final class StripMineJob {
 		} finally {
 			setKey(mc.options.keyUse, false);
 		}
+	}
+
+	/** How many of each valuable item is in the inventory (ignores stone, gravel, torches, tables). */
+	private Map<Item, Integer> countResources() {
+		Map<Item, Integer> counts = new HashMap<>();
+		Inventory inv = player().getInventory();
+		for (int i = 0; i < 36; i++) {
+			ItemStack s = inv.getItem(i);
+			Item item = s.getItem();
+			if (s.isEmpty() || JUNK.contains(item) || FALLING_FILLER.contains(item) || item == Items.TORCH
+					|| item == Items.CRAFTING_TABLE) {
+				continue;
+			}
+			counts.merge(item, s.getCount(), Integer::sum);
+		}
+		return counts;
+	}
+
+	private static int gained(Map<Item, Integer> before, Map<Item, Integer> after) {
+		int n = 0;
+		for (Map.Entry<Item, Integer> e : after.entrySet()) {
+			n += Math.max(0, e.getValue() - before.getOrDefault(e.getKey(), 0));
+		}
+		return n;
 	}
 
 	private int freeSlots() {
@@ -1360,7 +1428,6 @@ public final class StripMineJob {
 			player().getInventory().setSelectedSlot(slot);
 			Vec3 hit = Vec3.atCenterOf(floor).add(0, 0.5, 0);
 			lookAt(hit);
-			setKey(mc.options.keyShift, true);
 			tick();
 			MinerRunner.onMain(() -> gameMode().useItemOn(player(), InteractionHand.MAIN_HAND, new BlockHitResult(hit, Direction.UP, floor, false)));
 			swingHand();
@@ -1392,6 +1459,7 @@ public final class StripMineJob {
 
 	/** Housekeeping between steps: tools, food and inventory space. */
 	private void checkpoint(boolean inMainTunnel) {
+		checkGoal();
 		checkTools();
 		eatIfHungry();
 		if (inMainTunnel) {
@@ -1467,7 +1535,11 @@ public final class StripMineJob {
 			throw new StopException("§cHealth is low (" + Math.round(p.getHealth()) + "). Stopped.");
 		}
 		if (++ticks % 10 == 0) {
-			MinerRunner.onMain(() -> mc.gui.hud.setOverlayMessage(Component.literal("§6StripMiner:§r " + status()), false));
+			String bar = actionBar();
+			MinerRunner.onMain(() -> mc.gui.hud.setOverlayMessage(Component.literal(bar), false));
+		}
+		if (goal != null && goal.type() == Goal.Type.TIME) {
+			checkGoal();
 		}
 	}
 

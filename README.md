@@ -73,33 +73,53 @@ Stand where you want the tunnel to start and **face the direction to mine**. The
 
 | Command | What it does |
 |---|---|
-| `/stripmine start` | Start mining at your current height |
+| `/stripmine start` | Start mining at your current height, until stopped |
 | `/stripmine start -58` | Dig stairs down to Y = -58 first, then strip-mine there (a good height for diamonds) |
+| `/stripmine start time 30m` | Stop by itself after 30 minutes (`1h30m`, `90s`, or a plain number of minutes) |
+| `/stripmine start ores 20` | Stop after mining 20 ore blocks |
+| `/stripmine start items 64` | Stop after picking up 64 items from ores (diamonds, raw iron, ... Fortune drops count) |
+| `/stripmine start length 200` | Stop once the main tunnel is 200 blocks long |
+| `/stripmine start -58 ores 20` | Goals work after a Y level too |
 | `/stripmine stop` | Stop |
 | `/stripmine status` | Show progress |
+| `/stripmine help [topic]` | List commands, or explain one |
 
-### Settings: `/config` or `/stripmine config`
+**Help everywhere:** put `help` after any command instead of a value to see how it works, e.g.
+`/stripmine start help`, `/stripmine start time help` or `/stripmine config settings veinradius help`.
 
-Type `/config` (or `/stripmine config`) to see every setting and its value,
-`/config <setting>` to see one, and `/config <setting> <value>` to change one
-(tab-completion works). For example `/stripmine config torchinterval 28`.
+While it runs, the action bar shows the **run time** (yellow), the **tunnel length** (blue) and the
+**ores mined** with the **items** they dropped in brackets (green).
+
+### Settings: `/stripmine config`
+
+`/stripmine config` (or just `/config`) lists every setting. Put `help` after a setting's name to
+see what it does, its current value and its default.
+
+**Tunnel shape:** `/stripmine config settings <name> <value>`
 
 | Setting | Default | What it does |
 |---|---|---|
 | `branchlength` | 5 | Blocks mined to each side (at most 5, the furthest a player can reach) |
 | `branchspacing` | 3 | Blocks forward between branches |
 | `torchinterval` | 0 | Blocks between floor torches (0 = no torches) |
-| `maxlength` | 0 | Stop after this many tunnel blocks (0 = never) |
-| `veinradius` | 8 | How far (in blocks, sideways from where it stands in the tunnel) it may go to mine ores. Ores further away are left alone, so one big vein can't drag it off forever |
-| `compressfullstacks` | true | Craft full stacks into blocks at a crafting table |
+| `maxlength` | 0 | Always stop after this many tunnel blocks (0 = never) |
+| `veinradius` | 10 | How far (in blocks, sideways from its spot in the tunnel) it may go to mine ore. Ore further away is left alone, so one big vein can't drag it off forever |
+
+**Behaviour:** `/stripmine config <name> <value>`
+
+| Setting | Default | What it does |
+|---|---|---|
 | `minearoundores` | true | After mining a vein, dig the fewest extra blocks needed so every block touching the vein (diagonals too) has been uncovered, in case more ore hides there. Mostly useful on servers with anti-xray; on normal worlds the mod can already see hidden ore |
 | `isolatelava` | true | Fill lava next to an ore with gravel/sand instead of skipping the ore |
 | `collectgravel` | true | Take back gravel pillars that are safe to remove (torch trick) |
+| `compressfullstacks` | true | Craft full stacks into blocks at a crafting table |
 | `dropjunk` | true | Throw away cobblestone/stone/dirt when the inventory is nearly full |
 | `eatbelowfood` | 14 | Eat when hunger is at or below this (out of 20) |
 | `stopbelowhealth` | 8 | Stop when health is at or below this (out of 20) |
 | `keeptooldurability` | 5 | Never use a tool with this much durability left or less |
-| `ores` | diamond ores | `/config ores add minecraft:ancient_debris`, `remove`, `list`, `clear`, `reset` |
+
+**Ores:** `/stripmine config ores add minecraft:ancient_debris`, `remove`, `list`, `clear`, `reset`
+(default: diamond ore and deepslate diamond ore).
 
 You can also bind a key for start/stop under *Options → Controls → Key Binds → Strip Miner*.
 
@@ -121,7 +141,10 @@ torches, some food, a crafting table, some cobblestone, and gravel or sand for l
    [Fabric API](https://modrinth.com/mod/fabric-api) in your `mods` folder.
 2. Download the jar: open the **Actions** tab of this repository, click the latest successful
    **build** run, and download the **stripminer-mod-jar** artifact. Unzip it and put
-   `stripminer-2.0.0.jar` (not the `-sources` one) in your `.minecraft/mods` folder.
+   `stripminer-<version>.jar` (not the `-sources` one) in your `.minecraft/mods` folder.
+
+The version number goes up with every update (see [CHANGELOG.md](CHANGELOG.md)): the last
+number for small changes and fixes, the middle number for new features.
 
 ## Building it yourself
 
