@@ -3,6 +3,10 @@
 A client-side Fabric mod for **Minecraft 26.3** that strip-mines on its own at a height you
 choose, mines the ores it reveals, picks up the drops and avoids lava.
 
+This is entirely vibe-coded.
+
+I'm planning on adding a functionality to mine 2x2 spruce trees (and bigger clusters of spruce trees) in the future.
+
 ## What it does
 
 ```
