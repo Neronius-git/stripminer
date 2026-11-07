@@ -12,7 +12,7 @@ import java.io.Writer;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
-import java.util.HashSet;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
 
@@ -117,7 +117,7 @@ public final class MinerConfig {
 	}
 
 	public Set<Block> resolveOres() {
-		Set<Block> blocks = new HashSet<>();
+		Set<Block> blocks = new LinkedHashSet<>();
 		for (String id : ores) {
 			Identifier rl = Identifier.tryParse(id);
 			if (rl != null && BuiltInRegistries.BLOCK.containsKey(rl)) {

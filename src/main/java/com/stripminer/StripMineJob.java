@@ -7,6 +7,7 @@ import net.minecraft.client.player.LocalPlayer;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.core.component.DataComponents;
+import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.network.chat.Component;
 import net.minecraft.util.Mth;
 import net.minecraft.world.InteractionHand;
@@ -33,6 +34,7 @@ import java.util.Collections;
 import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
@@ -88,6 +90,14 @@ public final class StripMineJob {
 	/** Game ticks since the start (20 per second). */
 	private long ticks;
 	private final Goal goal;
+	/** Per ore type ("Diamond", "Iron", ...): {ore blocks mined, items picked up}. */
+	private final Map<String, int[]> perType = new LinkedHashMap<>();
+	/** What the on-screen overlay shows; rebuilt every half second, read by the render thread. */
+	private volatile List<HudLine> hud = List.of();
+
+	/** One line of the on-screen overlay. */
+	public record HudLine(String text, int color) {
+	}
 	private boolean warnedNoTorches;
 	private boolean warnedNoTable;
 	private volatile String phase = "starting";
@@ -105,14 +115,31 @@ public final class StripMineJob {
 
 	public String status() {
 		return "§e" + Goal.formatTicks(ticks) + "§r running, §b" + tunnelLength + "§r blocks of tunnel, §a"
-				+ oresMined + "§r ores mined (§a" + resources + "§r items), now " + phase
+				+ oresMined + "§r ores mined (§a" + resources + "§r items" + perTypeText() + "), now " + phase
 				+ (goal != null ? ". Goal: " + goal.describe() : "");
 	}
 
-	/** Action bar: run time, tunnel length, ores (items) - each in its own colour. */
-	private String actionBar() {
-		return "§eTime " + Goal.formatTicks(ticks) + "   §bTunnel " + tunnelLength + "   §aOres " + oresMined
-				+ " (" + resources + ")";
+	private String perTypeText() {
+		StringBuilder sb = new StringBuilder();
+		for (Map.Entry<String, int[]> e : perType.entrySet()) {
+			sb.append("; ").append(e.getKey()).append(' ').append(e.getValue()[0]).append(" (").append(e.getValue()[1]).append(')');
+		}
+		return sb.toString();
+	}
+
+	public List<HudLine> hudLines() {
+		return hud;
+	}
+
+	/** Rebuilds the overlay: run time, tunnel length, then one line per ore type: "Diamond: 5 (12)". */
+	private void updateHud() {
+		List<HudLine> lines = new ArrayList<>();
+		lines.add(new HudLine("Time " + Goal.formatTicks(ticks), 0xFFFFFF55));
+		lines.add(new HudLine("Tunnel " + tunnelLength, 0xFF55FFFF));
+		for (Map.Entry<String, int[]> e : perType.entrySet()) {
+			lines.add(new HudLine(e.getKey() + ": " + e.getValue()[0] + " (" + e.getValue()[1] + ")", 0xFF55FF55));
+		}
+		hud = List.copyOf(lines);
 	}
 
 	/** Stops the run once its goal is reached. */
@@ -141,6 +168,10 @@ public final class StripMineJob {
 		if (targets.isEmpty()) {
 			throw new StopException("No valid ores configured. Use /config ores add <block>.");
 		}
+		for (Block b : targets) {
+			perType.putIfAbsent(typeName(b), new int[2]);
+		}
+		updateHud();
 		forward = player().getDirection();
 		checkTools();
 		msg("Strip mining towards §b" + forward.getName() + "§r, looking for " + cfg.ores
@@ -252,72 +283,137 @@ public final class StripMineJob {
 	}
 
 	/**
-	 * Finds every target ore touching the given open blocks, mines each one
-	 * together with the rest of its vein, and collects the drops. If enabled, it then digs the
-	 * fewest blocks needed so every block touching the vein (diagonals included) has been seen,
-	 * so no ore of the vein can stay hidden.
+	 * Mines the ore found around the given open blocks, in two repeating steps:
+	 * <ol>
+	 * <li>Mine every target ore that is visible right now (touching open space), nearest first.</li>
+	 * <li>From the positions of the mined ores, work out every block around them (diagonals
+	 * included) where more of the same cluster could hide but that hasn't been seen yet. Then dig
+	 * the block that uncovers the most of those hidden spots for the fewest blocks dug (counting
+	 * the blocks dug to get there too). If that reveals ore, go back to step 1.</li>
+	 * </ol>
+	 * It stops when nothing is left that could hide more of the cluster.
 	 */
 	private void mineRevealedOres(Collection<BlockPos> openBlocks, BlockPos origin) {
 		takeCleared();
 		placedGravel.clear();
-		Set<BlockPos> seen = new HashSet<>();
-		List<BlockPos> pending = new ArrayList<>();
-		Set<BlockPos> vein = new HashSet<>();
-		Set<BlockPos> failed = new HashSet<>();
-		for (BlockPos c : openBlocks) {
-			addTouchingOres(c, seen, pending);
-		}
+		Set<BlockPos> open = new HashSet<>(openBlocks); // dug-out blocks whose sides we can see
+		Set<BlockPos> cluster = new HashSet<>();        // ores mined in this search
+		Set<BlockPos> skipped = new HashSet<>();        // ores that can't be mined safely
+		Set<BlockPos> failed = new HashSet<>();         // blocks we couldn't dig to look behind
 		int work = 0;
 		while (work++ < 600) {
 			checkpoint(false);
-			BlockPos me = feet();
-			if (!pending.isEmpty()) {
-				pending.sort(Comparator.comparingDouble(p -> p.distSqr(me)));
-				BlockPos ore = pending.remove(0);
-				if (!isTarget(ore) || !inRange(ore, origin)) {
-					continue;
+			open.addAll(takeCleared());
+
+			// Step 1: mine what is visible.
+			List<BlockPos> visible = visibleOres(open, cluster, skipped, origin);
+			if (!visible.isEmpty()) {
+				BlockPos me = feet();
+				visible.sort(Comparator.comparingDouble(p -> p.distSqr(me)));
+				BlockPos ore = visible.get(0);
+				if (mineOre(ore, origin)) {
+					cluster.add(ore);
+					open.add(ore);
+				} else {
+					skipped.add(ore);
 				}
-				if (!prepareOre(ore, origin)) {
-					continue;
-				}
-				phase = "mining ore";
-				Map<Item, Integer> before = countResources();
-				if (!mineBlock(ore)) {
-					continue;
-				}
-				oresMined++;
-				vein.add(ore);
-				if (!WorldChecks.lavaNeighbors(ore).isEmpty() && !feet().equals(ore)) {
-					// Lava found its way in after all: plug the hole before the drops can burn.
-					sealHole(ore);
-				}
-				collectDrops(ore, origin);
-				resources += gained(before, countResources());
-				// The rest of the vein that is already visible, diagonals included.
-				for (BlockPos n : around(ore)) {
-					if (isTarget(n) && seen.add(n)) {
-						pending.add(n);
-					}
-				}
-			} else {
-				if (!cfg.mineAroundOres || vein.isEmpty()) {
-					break;
-				}
-				BlockPos dig = bestRevealBlock(vein, origin, failed);
-				if (dig == null) {
-					break; // every block that could hide more of this vein has been seen
-				}
-				phase = "checking around the vein";
-				if (!reach(dig, origin) || !mineBlock(dig)) {
+				continue;
+			}
+
+			// Step 2: look where more of the cluster could be hiding.
+			if (!cfg.mineAroundOres || cluster.isEmpty()) {
+				break;
+			}
+			BlockPos dig = bestRevealBlock(cluster, origin, failed);
+			if (dig == null) {
+				break; // every spot that could hide more of this cluster has been checked
+			}
+			if (isTarget(dig)) {
+				// The block we were going to dig to look is itself ore.
+				if (mineOre(dig, origin)) {
+					cluster.add(dig);
+					open.add(dig);
+				} else {
+					skipped.add(dig);
 					failed.add(dig);
 				}
+				continue;
 			}
-			// Anything the digging revealed gets checked too.
-			for (BlockPos c : takeCleared()) {
-				addTouchingOres(c, seen, pending);
+			phase = "checking for hidden ore";
+			if (reach(dig, origin) && mineBlock(dig)) {
+				open.add(dig);
+			} else {
+				failed.add(dig);
 			}
 		}
 		recoverGravel(origin);
+	}
+
+	/** Target ores that can be seen now: touching our dug-out space, or part of the cluster and touching any open space. */
+	private List<BlockPos> visibleOres(Set<BlockPos> open, Set<BlockPos> cluster, Set<BlockPos> skipped, BlockPos origin) {
+		Set<BlockPos> found = new LinkedHashSet<>();
+		for (BlockPos o : open) {
+			for (Direction d : Direction.values()) {
+				BlockPos n = o.relative(d);
+				if (!skipped.contains(n) && !cluster.contains(n) && inRange(n, origin) && isTarget(n)) {
+					found.add(n);
+				}
+			}
+		}
+		for (BlockPos ore : cluster) {
+			for (BlockPos n : around(ore)) {
+				if (!skipped.contains(n) && !cluster.contains(n) && inRange(n, origin) && isTarget(n) && isSeen(n)) {
+					found.add(n);
+				}
+			}
+		}
+		return new ArrayList<>(found);
+	}
+
+	/** Goes to an ore, makes it safe, mines it and picks up the drops. Returns false if it was skipped. */
+	private boolean mineOre(BlockPos ore, BlockPos origin) {
+		String type = typeName(WorldChecks.level().getBlockState(ore).getBlock());
+		if (!prepareOre(ore, origin)) {
+			return false;
+		}
+		phase = "mining " + type.toLowerCase(java.util.Locale.ROOT) + " ore";
+		Map<Item, Integer> before = countResources();
+		if (!mineBlock(ore)) {
+			return false;
+		}
+		if (!WorldChecks.lavaNeighbors(ore).isEmpty() && !feet().equals(ore)) {
+			// Lava found its way in after all: plug the hole before the drops can burn.
+			sealHole(ore);
+		}
+		collectDrops(ore, origin);
+		int items = gained(before, countResources());
+		oresMined++;
+		resources += items;
+		int[] counts = perType.computeIfAbsent(type, k -> new int[2]);
+		counts[0]++;
+		counts[1] += items;
+		return true;
+	}
+
+	/** "minecraft:deepslate_diamond_ore" -> "Diamond", "minecraft:ancient_debris" -> "Ancient Debris". */
+	static String typeName(Block block) {
+		String path = BuiltInRegistries.BLOCK.getKey(block).getPath();
+		if (path.startsWith("deepslate_")) {
+			path = path.substring("deepslate_".length());
+		}
+		if (path.endsWith("_ore")) {
+			path = path.substring(0, path.length() - "_ore".length());
+		}
+		StringBuilder sb = new StringBuilder();
+		for (String word : path.split("_")) {
+			if (!word.isEmpty()) {
+				if (sb.length() > 0) {
+					sb.append(' ');
+				}
+				sb.append(Character.toUpperCase(word.charAt(0))).append(word.substring(1));
+			}
+		}
+		return sb.toString();
 	}
 
 	/** The 26 blocks around {@code pos} (sides, edges and corners). */
@@ -349,15 +445,17 @@ public final class StripMineJob {
 	}
 
 	/**
-	 * Picks the one block whose removal reveals the most still-unseen blocks around the vein.
-	 * Removing a block reveals itself and its 6 side neighbours, so for two ores side by side only
-	 * a handful of digs are needed instead of every block around them.
+	 * Picks the next block to dig to look for hidden ore of the cluster. A hidden spot is a block
+	 * touching a mined ore (sides, edges or corners) that hasn't been seen yet; digging a block
+	 * reveals itself and its 6 neighbours. For the most promising blocks it also counts the blocks
+	 * that must be dug to reach them (those reveal things too) and picks the one that reveals the
+	 * most hidden spots per block dug.
 	 */
-	private BlockPos bestRevealBlock(Set<BlockPos> vein, BlockPos origin, Set<BlockPos> failed) {
+	private BlockPos bestRevealBlock(Set<BlockPos> cluster, BlockPos origin, Set<BlockPos> failed) {
 		Set<BlockPos> unseen = new HashSet<>();
-		for (BlockPos ore : vein) {
+		for (BlockPos ore : cluster) {
 			for (BlockPos n : around(ore)) {
-				if (!vein.contains(n) && inRange(n, origin) && !isTarget(n) && !isSeen(n)) {
+				if (!cluster.contains(n) && inRange(n, origin) && !isSeen(n)) {
 					unseen.add(n);
 				}
 			}
@@ -365,6 +463,7 @@ public final class StripMineJob {
 		if (unseen.isEmpty()) {
 			return null;
 		}
+		// How many hidden spots each block would reveal on its own.
 		Map<BlockPos, Integer> score = new HashMap<>();
 		for (BlockPos c : unseen) {
 			score.merge(c, 1, Integer::sum);
@@ -373,21 +472,50 @@ public final class StripMineJob {
 			}
 		}
 		BlockPos me = feet();
+		List<BlockPos> options = new ArrayList<>();
+		for (BlockPos p : score.keySet()) {
+			if (!failed.contains(p) && !passable(p) && WorldChecks.canMine(p) && hazard(p) == null
+					&& !isTunnelFloor(p, origin) && inRange(p, origin)) {
+				options.add(p);
+			}
+		}
+		options.sort(Comparator.<BlockPos>comparingInt(p -> -score.get(p)).thenComparingDouble(p -> p.distSqr(me)));
+
 		BlockPos best = null;
-		int bestScore = 0;
-		double bestDist = 0;
-		for (Map.Entry<BlockPos, Integer> e : score.entrySet()) {
-			BlockPos p = e.getKey();
-			if (failed.contains(p) || passable(p) || !WorldChecks.canMine(p) || hazard(p) != null
-					|| isTunnelFloor(p, origin) || !inRange(p, origin)) {
+		double bestValue = 0;
+		int bestDug = Integer.MAX_VALUE;
+		for (BlockPos option : options.subList(0, Math.min(8, options.size()))) {
+			List<BlockPos> path = PathFinder.find(me, c -> canMineFrom(c, option), option, origin, cfg.veinRadius + 2, 8);
+			if (path == null) {
+				failed.add(option);
 				continue;
 			}
-			int s = e.getValue();
-			double dist = p.distSqr(me);
-			if (s > bestScore || (s == bestScore && dist < bestDist)) {
-				best = p;
-				bestScore = s;
-				bestDist = dist;
+			Set<BlockPos> dug = new HashSet<>();
+			BlockPos cur = me;
+			for (BlockPos next : path) {
+				for (BlockPos b : WorldChecks.required(cur, next)) {
+					if (!passable(b)) {
+						dug.add(b);
+					}
+				}
+				cur = next;
+			}
+			dug.add(option);
+			int revealed = 0;
+			for (BlockPos u : unseen) {
+				boolean hit = dug.contains(u);
+				for (Direction d : Direction.values()) {
+					hit |= dug.contains(u.relative(d));
+				}
+				if (hit) {
+					revealed++;
+				}
+			}
+			double value = revealed / (double) dug.size();
+			if (revealed > 0 && (value > bestValue + 1e-9 || (Math.abs(value - bestValue) < 1e-9 && dug.size() < bestDug))) {
+				best = option;
+				bestValue = value;
+				bestDug = dug.size();
 			}
 		}
 		return best;
@@ -625,15 +753,6 @@ public final class StripMineJob {
 		lookAt(hit);
 		MinerRunner.onMain(() -> gameMode().useItemOn(player(), InteractionHand.MAIN_HAND, new BlockHitResult(hit, Direction.UP, floor, false)));
 		swingHand();
-	}
-
-	private void addTouchingOres(BlockPos open, Set<BlockPos> seen, List<BlockPos> pending) {
-		for (Direction d : Direction.values()) {
-			BlockPos n = open.relative(d);
-			if (isTarget(n) && seen.add(n)) {
-				pending.add(n);
-			}
-		}
 	}
 
 	/** True if standing with feet in {@code stand} lets the player mine {@code ore} and catch its drop. */
@@ -1535,8 +1654,7 @@ public final class StripMineJob {
 			throw new StopException("§cHealth is low (" + Math.round(p.getHealth()) + "). Stopped.");
 		}
 		if (++ticks % 10 == 0) {
-			String bar = actionBar();
-			MinerRunner.onMain(() -> mc.gui.hud.setOverlayMessage(Component.literal(bar), false));
+			updateHud();
 		}
 		if (goal != null && goal.type() == Goal.Type.TIME) {
 			checkGoal();

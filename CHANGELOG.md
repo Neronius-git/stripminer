@@ -3,6 +3,14 @@
 Version numbers: the **last** number goes up for small changes and fixes, the **middle** number
 for bigger changes and new features (e.g. 2.0.0 → 2.0.1 → 2.1.0).
 
+## 2.2.0
+- Reworked ore mining: first mines every ore it can see, then works out from the mined ores
+  where more of the cluster could be hiding and digs the fewest blocks needed to check (counting
+  the blocks dug on the way there). Repeats when it finds more.
+- New on-screen overlay (top left): run time, tunnel length and one line per ore type with
+  ore blocks mined and items in brackets, e.g. `Diamond: 5 (12)`.
+- New `/stripmine pause` and `/stripmine resume`.
+
 ## 2.1.0
 - New goals: `/stripmine start time <duration>`, `ores <count>`, `items <count>`,
   `length <blocks>` (also after a Y level) stop the miner by themselves.

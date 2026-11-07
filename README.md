@@ -20,9 +20,15 @@ I'm planning on adding a functionality to mine 2x2 spruce trees (and bigger clus
 1. *(Optional)* Digs a staircase down (or up) to the Y level you pick.
 2. **Standing still** in the main tunnel, it mines a line of **5 blocks to the left at head
    height** (only the top block, 1 high).
-3. It checks the blocks around that line for the ores you're looking for. It digs to each ore,
-   mines the **whole vein** (diagonal neighbours too), picks up the drops, then walks back to its
-   spot in the main tunnel.
+3. It checks the blocks around that line for the ores you're looking for:
+   - First it mines **every ore it can see** (touching open space), digging to each one and
+     picking up the drops.
+   - Then it works out, from where those ores were, **where more of the same cluster could be
+     hiding** (every block touching a mined ore, diagonals included, that it hasn't seen yet) and
+     digs the **fewest blocks needed** to check all those spots. For each block it could dig, it counts
+     how many hidden spots that block uncovers (including any blocks dug on the way there) and digs
+     the one that uncovers the most per block. Any ore it finds is mined and the check repeats.
+   - Then it walks back to its spot in the main tunnel.
 4. It **turns right**, mines 5 blocks at head height to the right, and checks for ore the same way.
 5. It mines and walks **3 blocks forward** (2 high), checks that stretch for ore, and repeats from
    step 2.
@@ -85,14 +91,16 @@ Stand where you want the tunnel to start and **face the direction to mine**. The
 | `/stripmine start length 200` | Stop once the main tunnel is 200 blocks long |
 | `/stripmine start -58 ores 20` | Goals work after a Y level too |
 | `/stripmine stop` | Stop |
+| `/stripmine pause` / `resume` | Freeze it where it is (you get control back) and carry on later |
 | `/stripmine status` | Show progress |
 | `/stripmine help [topic]` | List commands, or explain one |
 
 **Help everywhere:** put `help` after any command instead of a value to see how it works, e.g.
 `/stripmine start help`, `/stripmine start time help` or `/stripmine config settings veinradius help`.
 
-While it runs, the action bar shows the **run time** (yellow), the **tunnel length** (blue) and the
-**ores mined** with the **items** they dropped in brackets (green).
+While it runs, the top-left corner shows the **run time** (yellow), the **tunnel length** (blue)
+and one green line per ore type it is looking for, with the ore blocks mined and the items they
+dropped in brackets, e.g. `Diamond: 5 (12)`.
 
 ### Settings: `/stripmine config`
 
@@ -113,7 +121,7 @@ see what it does, its current value and its default.
 
 | Setting | Default | What it does |
 |---|---|---|
-| `minearoundores` | true | After mining a vein, dig the fewest extra blocks needed so every block touching the vein (diagonals too) has been uncovered, in case more ore hides there. Mostly useful on servers with anti-xray; on normal worlds the mod can already see hidden ore |
+| `minearoundores` | true | After mining the ore it can see, check where more of the same cluster could be hiding, digging as few blocks as possible. Off = only mine ore it can see |
 | `isolatelava` | true | Fill lava next to an ore with gravel/sand instead of skipping the ore |
 | `collectgravel` | true | Take back gravel pillars that are safe to remove (torch trick) |
 | `compressfullstacks` | true | Craft full stacks into blocks at a crafting table |

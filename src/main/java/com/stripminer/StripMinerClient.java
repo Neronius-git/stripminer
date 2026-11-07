@@ -15,9 +15,13 @@ import net.fabricmc.fabric.api.client.command.v2.ClientCommandRegistrationCallba
 import net.fabricmc.fabric.api.client.command.v2.FabricClientCommandSource;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
 import net.fabricmc.fabric.api.client.keymapping.v1.KeyMappingHelper;
+import net.fabricmc.fabric.api.client.rendering.v1.hud.HudElementRegistry;
+import net.fabricmc.fabric.api.client.rendering.v1.hud.VanillaHudElements;
 import net.fabricmc.loader.api.FabricLoader;
+import net.minecraft.client.DeltaTracker;
 import net.minecraft.client.KeyMapping;
 import net.minecraft.client.Minecraft;
+import net.minecraft.client.gui.GuiGraphicsExtractor;
 import net.minecraft.commands.SharedSuggestionProvider;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.network.chat.Component;
@@ -59,6 +63,36 @@ public final class StripMinerClient implements ClientModInitializer {
 			}
 		});
 		ClientCommandRegistrationCallback.EVENT.register((dispatcher, registryAccess) -> register(dispatcher));
+		HudElementRegistry.attachElementBefore(VanillaHudElements.CHAT,
+				Identifier.fromNamespaceAndPath("stripminer", "status"), StripMinerClient::drawHud);
+	}
+
+	/** Top-left overlay while mining: time, tunnel length and one line per ore type. */
+	private static void drawHud(GuiGraphicsExtractor graphics, DeltaTracker deltaTracker) {
+		StripMineJob job = MinerRunner.current();
+		Minecraft mc = Minecraft.getInstance();
+		if (job == null || mc.player == null) {
+			return;
+		}
+		List<StripMineJob.HudLine> lines = new ArrayList<>(job.hudLines());
+		if (MinerRunner.isPaused()) {
+			lines.add(0, new StripMineJob.HudLine("PAUSED - /stripmine resume", 0xFFFF5555));
+		}
+		if (lines.isEmpty()) {
+			return;
+		}
+		int width = 0;
+		for (StripMineJob.HudLine line : lines) {
+			width = Math.max(width, mc.font.width(line.text()));
+		}
+		int x = 4;
+		int y = 4;
+		int lineHeight = 10;
+		graphics.fill(x - 2, y - 2, x + width + 2, y + lines.size() * lineHeight, 0x80000000);
+		for (StripMineJob.HudLine line : lines) {
+			graphics.text(mc.font, line.text(), x, y, line.color());
+			y += lineHeight;
+		}
 	}
 
 	static String version() {
@@ -107,9 +141,10 @@ public final class StripMinerClient implements ClientModInitializer {
 			intOpt("veinradius", true, 1, 16, "How far (in blocks, sideways from its spot in the main tunnel) it"
 					+ " may go to mine ore. Ore further away is left alone, so one big vein can't drag it off forever.",
 					c -> c.veinRadius, (c, v) -> c.veinRadius = v),
-			boolOpt("minearoundores", "After mining a vein, dig the fewest extra blocks needed so every block"
-					+ " touching the vein (diagonals too) has been uncovered, in case more ore hides there. Mostly"
-					+ " useful on servers with anti-xray; on normal worlds the mod can already see hidden ore.",
+			boolOpt("minearoundores", "After mining all the ore it can see, work out from the mined ores where more"
+					+ " of the same cluster could be hiding (every block touching them, diagonals too, that hasn't been"
+					+ " seen yet), then dig the fewest blocks needed to check those spots. Any ore found is mined"
+					+ " and the check repeats. Off = only mine ore it can see.",
 					c -> c.mineAroundOres, (c, v) -> c.mineAroundOres = v),
 			boolOpt("isolatelava", "When an ore touches lava, fill the lava in with gravel/sand (or cobblestone)"
 					+ " and then mine the ore, instead of skipping it.", c -> c.isolateLava, (c, v) -> c.isolateLava = v),
@@ -193,6 +228,11 @@ public final class StripMinerClient implements ClientModInitializer {
 				"§6start length <blocks>§r - stop once the main tunnel is this long.",
 				"Example: §b/stripmine start length 200"));
 		HELP.put("stop", List.of("§6stop§r - stop mining right away. Your settings stay as they are."));
+		HELP.put("pause", List.of(
+				"§6pause§r - freeze the miner where it is and give you back control.",
+				"§b/stripmine resume§r carries on from where it paused. Stand where it left you before resuming,",
+				"otherwise it continues from wherever you are standing."));
+		HELP.put("resume", List.of("§6resume§r - carry on after §b/stripmine pause§r."));
 		HELP.put("status", List.of("§6status§r - show run time, tunnel length, ores and items mined, and what it is doing now."));
 		HELP.put("config", List.of(
 				"§6config§r - change how the miner works. §b/stripmine config§r lists everything.",
@@ -223,9 +263,10 @@ public final class StripMinerClient implements ClientModInitializer {
 		lines.add("§6Strip Miner v" + version() + "§r - commands (put §bhelp§r after any of them for details):");
 		lines.add("§b/stripmine start [y] [time|ores|items|length <value>]§r - start mining");
 		lines.add("§b/stripmine stop§r - stop");
+		lines.add("§b/stripmine pause§r / §bresume§r - pause and carry on");
 		lines.add("§b/stripmine status§r - progress");
 		lines.add("§b/stripmine config§r - all settings (§bsettings§r for tunnel shape, §bores§r for the ore list)");
-		lines.add("§b/stripmine help <topic>§r - topics: start, time, ores, items, length, stop, status, config,"
+		lines.add("§b/stripmine help <topic>§r - topics: start, time, ores, items, length, stop, pause, resume, status, config,"
 				+ " settings, orelist, or any setting name");
 		return lines;
 	}
@@ -318,6 +359,26 @@ public final class StripMinerClient implements ClientModInitializer {
 							return 1;
 						})
 						.then(helpNode("stop")))
+				.then(literal("pause")
+						.executes(ctx -> {
+							if (MinerRunner.pause()) {
+								feedback(ctx, "Paused. §b/stripmine resume§r to carry on, §b/stripmine stop§r to stop.");
+							} else {
+								feedback(ctx, MinerRunner.isRunning() ? "Already paused." : "Not running.");
+							}
+							return 1;
+						})
+						.then(helpNode("pause")))
+				.then(literal("resume")
+						.executes(ctx -> {
+							if (MinerRunner.resume()) {
+								feedback(ctx, "Resumed.");
+							} else {
+								feedback(ctx, MinerRunner.isRunning() ? "Not paused." : "Not running.");
+							}
+							return 1;
+						})
+						.then(helpNode("resume")))
 				.then(literal("status")
 						.executes(ctx -> {
 							StripMineJob job = MinerRunner.current();
