@@ -17,15 +17,19 @@ I'm planning on adding a functionality to mine 2x2 spruce trees (and bigger clus
                                    LLLLL@RRRRR
 ```
 
-1. *(Optional)* Digs a staircase down (or up) to the Y level you pick.
+1. Digs a staircase down (or up) to **Y = -58** (setting `targety`), straight ahead or as a
+   2x2 spiral (setting `spiralstaircase`). `/stripmine start here` skips this and mines at your
+   current height.
 2. **Standing still** in the main tunnel, it mines a line of **5 blocks to the left at head
    height** (only the top block, 1 high).
 3. It checks the blocks around that line for the ores you're looking for:
    - First it mines **every ore it can see** (touching open space), digging to each one and
      picking up the drops.
    - Then it works out, from where those ores were, **where more of the same cluster could be
-     hiding** (every block touching a mined ore, diagonals included, that it hasn't seen yet) and
-     digs the **fewest blocks needed** to check all those spots. For each block it could dig, it counts
+     hiding**. A cluster fits in a 2x2x2 box (setting `clustersize`), so only blocks inside a
+     2x2x2 box that also holds every ore found so far are possible. For example, four ores lying
+     flat in a 2x2 square leave only the 4 blocks above and the 4 below; blocks it has already
+     seen are crossed off. It digs the **fewest blocks needed** to check the rest. For each block it could dig, it counts
      how many hidden spots that block uncovers (including any blocks dug on the way there) and digs
      the one that uncovers the most per block. Any ore it finds is mined and the check repeats.
    - Then it walks back to its spot in the main tunnel.
@@ -83,8 +87,9 @@ Stand where you want the tunnel to start and **face the direction to mine**. The
 
 | Command | What it does |
 |---|---|
-| `/stripmine start` | Start mining at your current height, until stopped |
-| `/stripmine start -58` | Dig stairs down to Y = -58 first, then strip-mine there (a good height for diamonds) |
+| `/stripmine start` | Dig stairs to Y = -58 (the `targety` setting), then mine until stopped |
+| `/stripmine start -40` | Dig stairs to another height first |
+| `/stripmine start here` | Mine at your current height (no stairs) |
 | `/stripmine start time 30m` | Stop by itself after 30 minutes (`1h30m`, `90s`, or a plain number of minutes) |
 | `/stripmine start ores 20` | Stop after mining 20 ore blocks |
 | `/stripmine start items 64` | Stop after picking up 64 items from ores (diamonds, raw iron, ... Fortune drops count) |
@@ -115,12 +120,15 @@ see what it does, its current value and its default.
 | `branchspacing` | 3 | Blocks forward between branches |
 | `torchinterval` | 0 | Blocks between floor torches (0 = no torches) |
 | `maxlength` | 0 | Always stop after this many tunnel blocks (0 = never) |
+| `targety` | -58 | Height `/stripmine start` digs stairs to |
+| `spiralstaircase` | false | Dig a 2x2 spiral staircase (turning right every step) instead of a straight one |
 | `veinradius` | 10 | How far (in blocks, sideways from its spot in the tunnel) it may go to mine ore. Ore further away is left alone, so one big vein can't drag it off forever |
 
 **Behaviour:** `/stripmine config <name> <value>`
 
 | Setting | Default | What it does |
 |---|---|---|
+| `clustersize` | 2 | Ore clusters fit in a box this big (2 = 2x2x2); only blocks that could still be in such a box are checked for hidden ore. Adapts if a cluster turns out bigger |
 | `minearoundores` | true | After mining the ore it can see, check where more of the same cluster could be hiding, digging as few blocks as possible. Off = only mine ore it can see |
 | `isolatelava` | true | Fill lava next to an ore with gravel/sand instead of skipping the ore |
 | `collectgravel` | true | Take back gravel pillars that are safe to remove (torch trick) |

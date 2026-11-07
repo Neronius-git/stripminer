@@ -3,6 +3,16 @@
 Version numbers: the **last** number goes up for small changes and fixes, the **middle** number
 for bigger changes and new features (e.g. 2.0.0 → 2.0.1 → 2.1.0).
 
+## 2.3.0
+- Smarter hidden-ore check: clusters are assumed to fit in a 2x2x2 box (`clustersize`), so only
+  blocks that could still share such a box with every ore found are checked (e.g. a flat 2x2 of
+  ores leaves just the 4 blocks above and 4 below). Adapts if a cluster is bigger.
+- Faster digging everywhere: no more waiting after each block unless gravel/sand could fall.
+- Faster staircase: keeps walking from step to step.
+- New `spiralstaircase` setting: 2x2 spiral staircase instead of a straight one.
+- `/stripmine start` now digs to Y = -58 by default (`targety` setting);
+  `/stripmine start here` mines at the current height.
+
 ## 2.2.0
 - Reworked ore mining: first mines every ore it can see, then works out from the mined ores
   where more of the cluster could be hiding and digs the fewest blocks needed to check (counting

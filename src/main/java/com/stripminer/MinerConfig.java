@@ -59,6 +59,12 @@ public final class MinerConfig {
 	public boolean isolateLava = true;
 	/** Afterwards, take back the gravel pillars that can be removed without letting lava flow (torch trick). */
 	public boolean collectGravel = true;
+	/** Height to dig stairs down (or up) to when starting with /stripmine start (no Y given). */
+	public int targetY = -58;
+	/** Dig a spiral staircase (2x2, turning right every step) instead of a straight one. */
+	public boolean spiralStaircase = false;
+	/** Ore clusters are assumed to fit in a box this many blocks wide, high and deep (2 = 2x2x2). */
+	public int clusterSize = 2;
 	/** Used to update old config files. */
 	public int configVersion = 0;
 

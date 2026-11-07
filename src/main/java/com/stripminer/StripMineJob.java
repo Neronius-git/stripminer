@@ -23,6 +23,7 @@ import net.minecraft.world.item.Items;
 import net.minecraft.world.item.component.SwingAnimation;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.Blocks;
+import net.minecraft.world.level.block.FallingBlock;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.BlockHitResult;
@@ -257,19 +258,33 @@ public final class StripMineJob {
 		returnTo(home);
 	}
 
-	/** Digs a staircase (in the facing direction) until the feet are at height {@code y}. */
+	/**
+	 * Digs a staircase until the feet are at height {@code y}: straight ahead in the facing
+	 * direction, or (with the spiralstaircase setting) a spiral that turns right every step and
+	 * stays inside a 2x2 column. It keeps walking from step to step without stopping.
+	 */
 	private void goToHeight(int y) {
-		phase = "digging stairs to Y=" + y;
-		msg("Digging a staircase to Y=" + y + "...");
-		while (feet().getY() != y) {
-			checkpoint(false);
-			BlockPos cur = feet();
-			int dy = y < cur.getY() ? -1 : 1;
-			BlockPos next = cur.relative(forward).offset(0, dy, 0);
-			if (!step(cur, next, false)) {
-				throw new StopException("Can't continue the staircase at " + fmt(next) + " (" + lastFailure
-						+ "). Stopped to stay safe.");
+		boolean spiral = cfg.spiralStaircase;
+		phase = "digging " + (spiral ? "a spiral" : "a") + " staircase to Y=" + y;
+		msg("Digging " + (spiral ? "a spiral" : "a") + " staircase to Y=" + y + "...");
+		Direction dir = forward;
+		try {
+			while (feet().getY() != y) {
+				checkpoint(false);
+				BlockPos cur = feet();
+				int dy = y < cur.getY() ? -1 : 1;
+				BlockPos next = cur.relative(dir).offset(0, dy, 0);
+				boolean last = next.getY() == y;
+				if (!step(cur, next, false, last)) {
+					throw new StopException("Can't continue the staircase at " + fmt(next) + " (" + lastFailure
+							+ "). Stopped to stay safe.");
+				}
+				if (spiral) {
+					dir = dir.getClockWise();
+				}
 			}
+		} finally {
+			releaseMovement();
 		}
 		moveTo(Vec3.atBottomCenterOf(feet()));
 	}
@@ -286,8 +301,8 @@ public final class StripMineJob {
 	 * Mines the ore found around the given open blocks, in two repeating steps:
 	 * <ol>
 	 * <li>Mine every target ore that is visible right now (touching open space), nearest first.</li>
-	 * <li>From the positions of the mined ores, work out every block around them (diagonals
-	 * included) where more of the same cluster could hide but that hasn't been seen yet. Then dig
+	 * <li>From the positions of the mined ores, work out where more of the same cluster could hide
+	 * (see {@link #clusterCandidates}) among the blocks that haven't been seen yet. Then dig
 	 * the block that uncovers the most of those hidden spots for the fewest blocks dug (counting
 	 * the blocks dug to get there too). If that reveals ore, go back to step 1.</li>
 	 * </ol>
@@ -453,11 +468,9 @@ public final class StripMineJob {
 	 */
 	private BlockPos bestRevealBlock(Set<BlockPos> cluster, BlockPos origin, Set<BlockPos> failed) {
 		Set<BlockPos> unseen = new HashSet<>();
-		for (BlockPos ore : cluster) {
-			for (BlockPos n : around(ore)) {
-				if (!cluster.contains(n) && inRange(n, origin) && !isSeen(n)) {
-					unseen.add(n);
-				}
+		for (BlockPos n : clusterCandidates(cluster)) {
+			if (inRange(n, origin) && !isSeen(n)) {
+				unseen.add(n);
 			}
 		}
 		if (unseen.isEmpty()) {
@@ -519,6 +532,46 @@ public final class StripMineJob {
 			}
 		}
 		return best;
+	}
+
+	/**
+	 * Every block that could still belong to the cluster. A cluster fits in a box of
+	 * clustersize x clustersize x clustersize blocks (2x2x2 by default), so only the blocks inside
+	 * some such box that also holds every ore found so far are possible. Example: four ores in a
+	 * flat 2x2 square leave only the 4 blocks above and the 4 below. If the ores found already
+	 * spread wider than that along an axis, the cluster is bigger than expected and one more block
+	 * in that direction is allowed.
+	 */
+	private Set<BlockPos> clusterCandidates(Set<BlockPos> cluster) {
+		int minX = Integer.MAX_VALUE, minY = Integer.MAX_VALUE, minZ = Integer.MAX_VALUE;
+		int maxX = Integer.MIN_VALUE, maxY = Integer.MIN_VALUE, maxZ = Integer.MIN_VALUE;
+		for (BlockPos p : cluster) {
+			minX = Math.min(minX, p.getX());
+			minY = Math.min(minY, p.getY());
+			minZ = Math.min(minZ, p.getZ());
+			maxX = Math.max(maxX, p.getX());
+			maxY = Math.max(maxY, p.getY());
+			maxZ = Math.max(maxZ, p.getZ());
+		}
+		int ex = boxEdge(maxX - minX + 1), ey = boxEdge(maxY - minY + 1), ez = boxEdge(maxZ - minZ + 1);
+		// The union of all boxes of that size containing the ores found so far.
+		Set<BlockPos> candidates = new HashSet<>();
+		for (int x = maxX - ex + 1; x <= minX + ex - 1; x++) {
+			for (int y = maxY - ey + 1; y <= minY + ey - 1; y++) {
+				for (int z = maxZ - ez + 1; z <= minZ + ez - 1; z++) {
+					BlockPos p = new BlockPos(x, y, z);
+					if (!cluster.contains(p)) {
+						candidates.add(p);
+					}
+				}
+			}
+		}
+		return candidates;
+	}
+
+	private int boxEdge(int span) {
+		int size = Math.max(1, cfg.clusterSize);
+		return span > size ? span + 1 : size;
 	}
 
 	private boolean inRange(BlockPos pos, BlockPos origin) {
@@ -945,6 +998,9 @@ public final class StripMineJob {
 				}
 			}
 			if (todo == null) {
+				if (!mightFall(blocks)) {
+					return true; // nothing above can fall in: no need to wait
+				}
 				// Give falling blocks a moment to land, then check again.
 				boolean settled = true;
 				for (int i = 0; i < 6; i++) {
@@ -971,6 +1027,16 @@ public final class StripMineJob {
 		}
 		lastFailure = "blocks kept falling in";
 		return false;
+	}
+
+	/** True if gravel/sand sits right above one of the blocks, or something is already falling nearby. */
+	private boolean mightFall(List<BlockPos> blocks) {
+		for (BlockPos b : blocks) {
+			if (WorldChecks.level().getBlockState(b.above()).getBlock() instanceof FallingBlock) {
+				return true;
+			}
+		}
+		return fallingNear(blocks);
 	}
 
 	private boolean fallingNear(List<BlockPos> blocks) {

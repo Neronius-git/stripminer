@@ -58,7 +58,7 @@ public final class StripMinerClient implements ClientModInitializer {
 				if (MinerRunner.isRunning()) {
 					MinerRunner.stop("Stopped.");
 				} else {
-					startMining(null, null);
+					startMining(MinerConfig.get().targetY, null);
 				}
 			}
 		});
@@ -141,6 +141,16 @@ public final class StripMinerClient implements ClientModInitializer {
 			intOpt("veinradius", true, 1, 16, "How far (in blocks, sideways from its spot in the main tunnel) it"
 					+ " may go to mine ore. Ore further away is left alone, so one big vein can't drag it off forever.",
 					c -> c.veinRadius, (c, v) -> c.veinRadius = v),
+			intOpt("targety", true, -63, 319, "The height /stripmine start digs stairs to before mining (feet level)."
+					+ " -58 is good for diamonds. Use /stripmine start here to mine at your current height instead.",
+					c -> c.targetY, (c, v) -> c.targetY = v),
+			boolOpt("spiralstaircase", true, "Dig a spiral staircase (2x2, turning right every step) instead of a"
+					+ " straight one when going to the target height. Takes no room ahead and is easy to climb back up.",
+					c -> c.spiralStaircase, (c, v) -> c.spiralStaircase = v),
+			intOpt("clustersize", false, 1, 5, "How big an ore cluster can be: it is assumed to fit in a box this"
+					+ " many blocks wide, high and deep (2 = 2x2x2). Only blocks that could still be in such a box"
+					+ " with all the ores found are checked for hidden ore. If a cluster turns out bigger, it adapts.",
+					c -> c.clusterSize, (c, v) -> c.clusterSize = v),
 			boolOpt("minearoundores", "After mining all the ore it can see, work out from the mined ores where more"
 					+ " of the same cluster could be hiding (every block touching them, diagonals too, that hasn't been"
 					+ " seen yet), then dig the fewest blocks needed to check those spots. Any ore found is mined"
@@ -171,7 +181,12 @@ public final class StripMinerClient implements ClientModInitializer {
 
 	private static Option<Boolean> boolOpt(String name, String help,
 			Function<MinerConfig, Boolean> get, BiConsumer<MinerConfig, Boolean> set) {
-		return new Option<>(name, false, "true|false", help, get, set, BoolArgumentType.bool(), Boolean.class);
+		return boolOpt(name, false, help, get, set);
+	}
+
+	private static Option<Boolean> boolOpt(String name, boolean tunnel, String help,
+			Function<MinerConfig, Boolean> get, BiConsumer<MinerConfig, Boolean> set) {
+		return new Option<>(name, tunnel, "true|false", help, get, set, BoolArgumentType.bool(), Boolean.class);
 	}
 
 	private static <T> List<String> optionHelp(Option<T> opt) {
@@ -208,9 +223,10 @@ public final class StripMinerClient implements ClientModInitializer {
 	static {
 		HELP.put("start", List.of(
 				"§6start§r - start strip mining in the direction you are facing.",
-				"§b/stripmine start§r - mine at your current height until stopped",
-				"§b/stripmine start <y>§r - first dig stairs to height Y (e.g. -58 for diamonds)",
-				"Add a goal to stop by itself (also after a Y): §btime§r, §bores§r, §bitems§r or §blength§r,",
+				"§b/stripmine start§r - dig stairs to the targety setting (default -58), then mine until stopped",
+				"§b/stripmine start <y>§r - dig stairs to height Y first",
+				"§b/stripmine start here§r - mine at your current height (no stairs)",
+				"Add a goal to stop by itself (also after a Y or §bhere§r): §btime§r, §bores§r, §bitems§r or §blength§r,",
 				"e.g. §b/stripmine start time 30m§r, §b/stripmine start -58 ores 20§r.",
 				"Type §b/stripmine start time help§r etc. for each goal."));
 		HELP.put("time", List.of(
@@ -237,14 +253,15 @@ public final class StripMinerClient implements ClientModInitializer {
 		HELP.put("config", List.of(
 				"§6config§r - change how the miner works. §b/stripmine config§r lists everything.",
 				"§b/stripmine config settings <name> <value>§r - tunnel shape: branchlength, branchspacing,"
-						+ " torchinterval, maxlength, veinradius",
-				"§b/stripmine config <name> <value>§r - behaviour: minearoundores, isolatelava, collectgravel,"
+						+ " torchinterval, maxlength, veinradius, targety, spiralstaircase",
+				"§b/stripmine config <name> <value>§r - behaviour: clustersize, minearoundores, isolatelava, collectgravel,"
 						+ " compressfullstacks, dropjunk, eatbelowfood, stopbelowhealth, keeptooldurability",
 				"§b/stripmine config ores ...§r - which ores to look for",
 				"Put §bhelp§r after any setting to see what it does, e.g. §b/stripmine config settings veinradius help"));
 		HELP.put("settings", List.of(
 				"§6config settings§r - the shape of the tunnel:",
-				"§bbranchlength§r, §bbranchspacing§r, §btorchinterval§r, §bmaxlength§r, §bveinradius",
+				"§bbranchlength§r, §bbranchspacing§r, §btorchinterval§r, §bmaxlength§r, §bveinradius§r, §btargety§r,"
+						+ " §bspiralstaircase",
 				"Usage: §b/stripmine config settings <name> <value>§r, or §b... <name> help§r to learn more."));
 		HELP.put("orelist", List.of(
 				"§6config ores§r - which blocks the miner looks for (default: diamond ore and deepslate diamond ore).",
@@ -261,7 +278,7 @@ public final class StripMinerClient implements ClientModInitializer {
 	private static List<String> overview() {
 		List<String> lines = new ArrayList<>();
 		lines.add("§6Strip Miner v" + version() + "§r - commands (put §bhelp§r after any of them for details):");
-		lines.add("§b/stripmine start [y] [time|ores|items|length <value>]§r - start mining");
+		lines.add("§b/stripmine start [y|here] [time|ores|items|length <value>]§r - start mining");
 		lines.add("§b/stripmine stop§r - stop");
 		lines.add("§b/stripmine pause§r / §bresume§r - pause and carry on");
 		lines.add("§b/stripmine status§r - progress");
@@ -341,10 +358,14 @@ public final class StripMinerClient implements ClientModInitializer {
 						})))
 				.then(withGoals(literal("start"), false)
 						.executes(ctx -> {
-							startMining(null, null);
+							startMining(MinerConfig.get().targetY, null);
 							return 1;
 						})
 						.then(helpNode("start"))
+						.then(withGoals(literal("here"), false, true).executes(ctx -> {
+							startMining(null, null);
+							return 1;
+						}))
 						.then(withGoals(argument("y", IntegerArgumentType.integer(-63, 319)), true).executes(ctx -> {
 							startMining(IntegerArgumentType.getInteger(ctx, "y"), null);
 							return 1;
@@ -391,6 +412,14 @@ public final class StripMinerClient implements ClientModInitializer {
 
 	/** Adds the goal sub-commands (time/ores/items/length) under a start node. */
 	private static <T extends ArgumentBuilder<FabricClientCommandSource, T>> T withGoals(T node, boolean hasY) {
+		return withGoals(node, hasY, false);
+	}
+
+	/**
+	 * @param hasY  a Y level was typed before the goal
+	 * @param here  "start here": mine at the current height (otherwise, without a Y, the targety setting is used)
+	 */
+	private static <T extends ArgumentBuilder<FabricClientCommandSource, T>> T withGoals(T node, boolean hasY, boolean here) {
 		return node
 				.then(literal("time")
 						.then(helpNode("time"))
@@ -402,25 +431,29 @@ public final class StripMinerClient implements ClientModInitializer {
 										+ "' as a time. Use e.g. 30m, 1h30m, 90s or a number of minutes."));
 								return 0;
 							}
-							startMining(y(ctx, hasY), new Goal(Goal.Type.TIME, ticks));
+							startMining(y(ctx, hasY, here), new Goal(Goal.Type.TIME, ticks));
 							return 1;
 						})))
-				.then(goalNode("ores", Goal.Type.ORES, "count", hasY))
-				.then(goalNode("items", Goal.Type.ITEMS, "count", hasY))
-				.then(goalNode("length", Goal.Type.LENGTH, "blocks", hasY));
+				.then(goalNode("ores", Goal.Type.ORES, "count", hasY, here))
+				.then(goalNode("items", Goal.Type.ITEMS, "count", hasY, here))
+				.then(goalNode("length", Goal.Type.LENGTH, "blocks", hasY, here));
 	}
 
-	private static LiteralArgumentBuilder<FabricClientCommandSource> goalNode(String name, Goal.Type type, String arg, boolean hasY) {
+	private static LiteralArgumentBuilder<FabricClientCommandSource> goalNode(String name, Goal.Type type, String arg,
+			boolean hasY, boolean here) {
 		return literal(name)
 				.then(helpNode(name))
 				.then(argument(arg, IntegerArgumentType.integer(1)).executes(ctx -> {
-					startMining(y(ctx, hasY), new Goal(type, IntegerArgumentType.getInteger(ctx, arg)));
+					startMining(y(ctx, hasY, here), new Goal(type, IntegerArgumentType.getInteger(ctx, arg)));
 					return 1;
 				}));
 	}
 
-	private static Integer y(CommandContext<FabricClientCommandSource> ctx, boolean hasY) {
-		return hasY ? IntegerArgumentType.getInteger(ctx, "y") : null;
+	private static Integer y(CommandContext<FabricClientCommandSource> ctx, boolean hasY, boolean here) {
+		if (hasY) {
+			return IntegerArgumentType.getInteger(ctx, "y");
+		}
+		return here ? null : MinerConfig.get().targetY;
 	}
 
 	/** The settings command tree, used for /config and /stripmine config. */
