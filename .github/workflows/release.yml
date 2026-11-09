@@ -1,9 +1,12 @@
-# Publishes a GitHub release with the mod jar whenever a version tag (e.g. v26.3.5.1) is pushed.
-# The tag must match the version in gradle.properties.
+# Publishes a GitHub release with the mod jar for the version in gradle.properties:
+# - automatically when a push changes gradle.properties (a new version), unless that version
+#   already has a release;
+# - or when a tag like v26.3.5.1 is pushed (the tag must match the version).
 
 name: release
 on:
   push:
+    paths: ['gradle.properties']
     tags: ['v*']
 
 permissions:
@@ -20,26 +23,36 @@ jobs:
         with:
           java-version: '25'
           distribution: 'microsoft'
-      - name: check that the tag matches the mod version
+      - name: work out the version
+        id: version
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           version=$(grep '^version=' gradle.properties | cut -d= -f2)
-          if [ "v$version" != "$GITHUB_REF_NAME" ]; then
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          if [ "$GITHUB_REF_TYPE" = "tag" ] && [ "v$version" != "$GITHUB_REF_NAME" ]; then
             echo "Tag $GITHUB_REF_NAME does not match version $version in gradle.properties"
             exit 1
           fi
+          if gh release view "v$version" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
+            echo "Release v$version already exists, nothing to do."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          fi
       - name: build
+        if: steps.version.outputs.skip != 'true'
         run: |
           chmod +x ./gradlew
           ./gradlew build
       - name: create release
+        if: steps.version.outputs.skip != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          version="${GITHUB_REF_NAME#v}"
+          version="${{ steps.version.outputs.version }}"
           # Release notes: this version's section of CHANGELOG.md
           awk -v head="## $version" '$0 == head {f = 1; next} /^## / {f = 0} f' CHANGELOG.md > notes.md
           printf '\nFor Minecraft 26.3 with Fabric Loader and Fabric API. Put the jar in your mods folder.\n' >> notes.md
-          gh release create "$GITHUB_REF_NAME" "build/libs/stripminer-$version.jar" \
+          gh release create "v$version" "build/libs/stripminer-$version.jar" \
             --title "Strip Miner $version (Minecraft 26.3)" \
             --notes-file notes.md \
             --target "$GITHUB_SHA"
