@@ -6,8 +6,10 @@
 name: release
 on:
   push:
-    paths: ['gradle.properties']
+    # Any branch, but only when gradle.properties (the version) changed; or any v* tag.
+    branches: ['**']
     tags: ['v*']
+    paths: ['gradle.properties']
 
 permissions:
   contents: write
