@@ -3,6 +3,13 @@
 Version numbers: the **last** number goes up for small changes and fixes, the **middle** number
 for bigger changes and new features (e.g. 2.0.0 → 2.0.1 → 2.1.0).
 
+## 2.4.0
+- New tree mode: `/stripmine tree` chops the 2x2 tree (or group of connected 2x2 trees) you are
+  looking at: spiral staircase up inside a trunk at the edge, tallest trees cut down to the
+  others first, then the whole group layer by layer, then the wood is picked up.
+- Staircase adapts: if the next step would hit lava, water or a cave, it digs a short straight
+  tunnel around it, then switches back to the chosen staircase mode.
+
 ## 2.3.0
 - Smarter hidden-ore check: clusters are assumed to fit in a 2x2x2 box (`clustersize`), so only
   blocks that could still share such a box with every ore found are checked (e.g. a flat 2x2 of

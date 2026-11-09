@@ -44,12 +44,15 @@ import static net.fabricmc.fabric.api.client.command.v2.ClientCommands.literal;
  */
 public final class StripMinerClient implements ClientModInitializer {
 	private static KeyMapping toggleKey;
+	private static KeyMapping treeKey;
 
 	@Override
 	public void onInitializeClient() {
 		MinerConfig.get();
 		KeyMapping.Category category = KeyMapping.Category.register(Identifier.fromNamespaceAndPath("stripminer", "main"));
 		toggleKey = KeyMappingHelper.registerKeyMapping(new KeyMapping("key.stripminer.toggle",
+				InputConstants.Type.KEYBOARD, InputConstants.UNKNOWN.getValue(), category));
+		treeKey = KeyMappingHelper.registerKeyMapping(new KeyMapping("key.stripminer.tree",
 				InputConstants.Type.KEYBOARD, InputConstants.UNKNOWN.getValue(), category));
 
 		ClientTickEvents.START_CLIENT_TICK.register(MinerRunner::onClientTick);
@@ -60,6 +63,9 @@ public final class StripMinerClient implements ClientModInitializer {
 				} else {
 					startMining(MinerConfig.get().targetY, null);
 				}
+			}
+			while (treeKey.consumeClick()) {
+				startTree();
 			}
 		});
 		ClientCommandRegistrationCallback.EVENT.register((dispatcher, registryAccess) -> register(dispatcher));
@@ -113,6 +119,25 @@ public final class StripMinerClient implements ClientModInitializer {
 		}
 	}
 
+	/** Starts tree mode on the log the player is looking at. */
+	private static void startTree() {
+		Minecraft mc = Minecraft.getInstance();
+		if (mc.player == null || mc.level == null) {
+			return;
+		}
+		if (!(mc.hitResult instanceof net.minecraft.world.phys.BlockHitResult hit)
+				|| mc.hitResult.getType() != net.minecraft.world.phys.HitResult.Type.BLOCK
+				|| !mc.level.getBlockState(hit.getBlockPos()).is(net.minecraft.tags.BlockTags.LOGS)) {
+			MinerRunner.sendChat("Look at a log of the 2x2 tree you want to chop (close enough to reach it), then try again.");
+			return;
+		}
+		if (MinerRunner.start(StripMineJob.chopTree(MinerConfig.get(), hit.getBlockPos()))) {
+			MinerRunner.sendChat("Chopping the tree. §b/stripmine stop§r to stop.");
+		} else {
+			MinerRunner.sendChat("Already running. Use /stripmine stop first.");
+		}
+	}
+
 	// ------------------------------------------------------------------------------------------
 	// Settings
 	// ------------------------------------------------------------------------------------------
@@ -145,7 +170,8 @@ public final class StripMinerClient implements ClientModInitializer {
 					+ " -58 is good for diamonds. Use /stripmine start here to mine at your current height instead.",
 					c -> c.targetY, (c, v) -> c.targetY = v),
 			boolOpt("spiralstaircase", true, "Dig a spiral staircase (2x2, turning right every step) instead of a"
-					+ " straight one when going to the target height. Takes no room ahead and is easy to climb back up.",
+					+ " straight one when going to the target height. Either way, when the next step would hit"
+					+ " lava, water or a cave, it digs a short straight tunnel around it and then carries on.",
 					c -> c.spiralStaircase, (c, v) -> c.spiralStaircase = v),
 			intOpt("clustersize", false, 1, 5, "How big an ore cluster can be: it is assumed to fit in a box this"
 					+ " many blocks wide, high and deep (2 = 2x2x2). Only blocks that could still be in such a box"
@@ -243,6 +269,13 @@ public final class StripMinerClient implements ClientModInitializer {
 		HELP.put("length", List.of(
 				"§6start length <blocks>§r - stop once the main tunnel is this long.",
 				"Example: §b/stripmine start length 200"));
+		HELP.put("tree", List.of(
+				"§6tree§r - chop down the 2x2 tree you are looking at (big spruce, jungle, dark oak).",
+				"If several 2x2 trees stand right next to each other, it chops the whole group:",
+				"it digs a spiral staircase up inside the nearest trunk (and up the tallest one), then always",
+				"mines the highest layer of logs left - the tallest tree comes down to the next tallest, and so",
+				"on until they're level, then the whole group comes down layer by layer. Then it picks up the wood.",
+				"Bring an axe. You can also bind a key for it in Options > Controls > Strip Miner."));
 		HELP.put("stop", List.of("§6stop§r - stop mining right away. Your settings stay as they are."));
 		HELP.put("pause", List.of(
 				"§6pause§r - freeze the miner where it is and give you back control.",
@@ -279,11 +312,12 @@ public final class StripMinerClient implements ClientModInitializer {
 		List<String> lines = new ArrayList<>();
 		lines.add("§6Strip Miner v" + version() + "§r - commands (put §bhelp§r after any of them for details):");
 		lines.add("§b/stripmine start [y|here] [time|ores|items|length <value>]§r - start mining");
+		lines.add("§b/stripmine tree§r - chop the 2x2 tree you are looking at");
 		lines.add("§b/stripmine stop§r - stop");
 		lines.add("§b/stripmine pause§r / §bresume§r - pause and carry on");
 		lines.add("§b/stripmine status§r - progress");
 		lines.add("§b/stripmine config§r - all settings (§bsettings§r for tunnel shape, §bores§r for the ore list)");
-		lines.add("§b/stripmine help <topic>§r - topics: start, time, ores, items, length, stop, pause, resume, status, config,"
+		lines.add("§b/stripmine help <topic>§r - topics: start, time, ores, items, length, tree, stop, pause, resume, status, config,"
 				+ " settings, orelist, or any setting name");
 		return lines;
 	}
@@ -380,6 +414,12 @@ public final class StripMinerClient implements ClientModInitializer {
 							return 1;
 						})
 						.then(helpNode("stop")))
+				.then(literal("tree")
+						.executes(ctx -> {
+							startTree();
+							return 1;
+						})
+						.then(helpNode("tree")))
 				.then(literal("pause")
 						.executes(ctx -> {
 							if (MinerRunner.pause()) {

@@ -32,6 +32,16 @@ public final class PathFinder {
 	 */
 	public static List<BlockPos> find(BlockPos start, Predicate<BlockPos> goal, BlockPos target,
 			BlockPos center, int radiusXZ, int radiusY) {
+		return find(start, goal, target, center, radiusXZ, radiusY, WorldChecks::moveCost);
+	}
+
+	/** Cost of moving from one cell to a neighbouring one, or a negative number if not allowed. */
+	public interface MoveCost {
+		double cost(BlockPos cur, BlockPos next);
+	}
+
+	public static List<BlockPos> find(BlockPos start, Predicate<BlockPos> goal, BlockPos target,
+			BlockPos center, int radiusXZ, int radiusY, MoveCost moveCost) {
 		PriorityQueue<Node> open = new PriorityQueue<>(Comparator.comparingDouble(Node::f));
 		Map<BlockPos, Double> best = new HashMap<>();
 		open.add(new Node(start, 0, heuristic(start, target), null));
@@ -58,7 +68,7 @@ public final class PathFinder {
 							|| Math.abs(next.getY() - center.getY()) > radiusY) {
 						continue;
 					}
-					double cost = WorldChecks.moveCost(n.pos, next);
+					double cost = moveCost.cost(n.pos, next);
 					if (cost < 0) {
 						continue;
 					}

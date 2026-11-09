@@ -1,4 +1,5 @@
 {
 	"key.stripminer.toggle": "Start / stop strip mining",
-	"key.category.stripminer.main": "Strip Miner"
+	"key.category.stripminer.main": "Strip Miner",
+	"key.stripminer.tree": "Chop the 2x2 tree you are looking at"
 }

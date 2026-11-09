@@ -11,6 +11,8 @@ import net.minecraft.world.level.block.FallingBlock;
 import net.minecraft.world.level.block.state.BlockState;
 
 import java.util.ArrayList;
+import java.util.HashSet;
+import java.util.Set;
 import java.util.List;
 
 /** Read-only questions about blocks around the player. All lava-safety rules live here. */
@@ -28,6 +30,44 @@ public final class WorldChecks {
 
 	public static boolean isLava(BlockPos pos) {
 		return level().getFluidState(pos).is(FluidTags.LAVA);
+	}
+
+	public static boolean isWater(BlockPos pos) {
+		return level().getFluidState(pos).is(FluidTags.WATER);
+	}
+
+	/**
+	 * Extra checks for a staircase step from {@code cur} to {@code next}: returns why the step is a
+	 * bad idea (water, or breaking into a cave), or null if it is fine. {@code ours} holds the
+	 * blocks the staircase itself has already opened, which don't count as caves.
+	 */
+	public static String stairProblem(BlockPos cur, BlockPos next, Set<BlockPos> ours) {
+		List<BlockPos> req = required(cur, next);
+		Set<BlockPos> own = new HashSet<>(ours);
+		own.addAll(req);
+		own.add(cur);
+		own.add(cur.above());
+		for (BlockPos b : req) {
+			if (isWater(b)) {
+				return "water at " + fmt(b);
+			}
+			if (passable(b) && !ours.contains(b)) {
+				return "a cave at " + fmt(b);
+			}
+			for (Direction d : Direction.values()) {
+				BlockPos n = b.relative(d);
+				if (own.contains(n)) {
+					continue;
+				}
+				if (isWater(n)) {
+					return "water next to " + fmt(b);
+				}
+				if (!passable(b) && passable(n)) {
+					return "a cave at " + fmt(n);
+				}
+			}
+		}
+		return null;
 	}
 
 	/** True if the player can stand/walk in this block without mining it. */

@@ -18,7 +18,8 @@ I'm planning on adding a functionality to mine 2x2 spruce trees (and bigger clus
 ```
 
 1. Digs a staircase down (or up) to **Y = -58** (setting `targety`), straight ahead or as a
-   2x2 spiral (setting `spiralstaircase`). `/stripmine start here` skips this and mines at your
+   2x2 spiral (setting `spiralstaircase`). When the next step would run into **lava, water or a
+   cave**, it digs a short straight tunnel around it and then goes back to the staircase. `/stripmine start here` skips this and mines at your
    current height.
 2. **Standing still** in the main tunnel, it mines a line of **5 blocks to the left at head
    height** (only the top block, 1 high).
@@ -95,6 +96,7 @@ Stand where you want the tunnel to start and **face the direction to mine**. The
 | `/stripmine start items 64` | Stop after picking up 64 items from ores (diamonds, raw iron, ... Fortune drops count) |
 | `/stripmine start length 200` | Stop once the main tunnel is 200 blocks long |
 | `/stripmine start -58 ores 20` | Goals work after a Y level too |
+| `/stripmine tree` | Chop down the 2x2 tree (or group of 2x2 trees) you are looking at, see below |
 | `/stripmine stop` | Stop |
 | `/stripmine pause` / `resume` | Freeze it where it is (you get control back) and carry on later |
 | `/stripmine status` | Show progress |
@@ -106,6 +108,22 @@ Stand where you want the tunnel to start and **face the direction to mine**. The
 While it runs, the top-left corner shows the **run time** (yellow), the **tunnel length** (blue)
 and one green line per ore type it is looking for, with the ore blocks mined and the items they
 dropped in brackets, e.g. `Diamond: 5 (12)`.
+
+### Tree mode: `/stripmine tree`
+
+Look at a log of a **2x2 tree** (big spruce, jungle or dark oak) and type `/stripmine tree`
+(or bind a key under *Controls → Strip Miner*). If several 2x2 trees stand right next to each other,
+it chops the whole group:
+
+1. It digs a **spiral staircase up inside the trunk** of the nearest tree (the edge of the group).
+   If another tree is taller, it walks over and spirals up that one too.
+2. It always mines the **highest layer of logs** left: the tallest tree comes down to the height
+   of the next tallest, then those come down together, and so on until all trees are level.
+   Then the whole group comes down layer by layer.
+3. It picks up the wood (and saplings) that dropped.
+
+Up in the trees it stops exactly on every block and never steps where there is no floor, so it
+can't fall. Bring an axe.
 
 ### Settings: `/stripmine config`
 

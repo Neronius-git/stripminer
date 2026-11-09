@@ -91,6 +91,7 @@ public final class StripMineJob {
 	/** Game ticks since the start (20 per second). */
 	private long ticks;
 	private final Goal goal;
+	private final BlockPos treeStart;
 	/** Per ore type ("Diamond", "Iron", ...): {ore blocks mined, items picked up}. */
 	private final Map<String, int[]> perType = new LinkedHashMap<>();
 	/** What the on-screen overlay shows; rebuilt every half second, read by the render thread. */
@@ -101,20 +102,37 @@ public final class StripMineJob {
 	}
 	private boolean warnedNoTorches;
 	private boolean warnedNoTable;
-	private volatile String phase = "starting";
-	private String lastFailure = "";
+	volatile String phase = "starting";
+	String lastFailure = "";
 	/** Blocks dug since the last call to {@link #takeCleared()}, used to spot newly revealed ores. */
 	private final List<BlockPos> cleared = new ArrayList<>();
 	/** Where gravel/sand was dropped into lava, so the pillars can be collected again. */
 	private final List<BlockPos> placedGravel = new ArrayList<>();
+	/** Stop exactly on every block of a path (used high up in trees, where overshooting could mean a fall). */
+	boolean careful;
+	/** Set when this job chops trees instead of strip mining. */
+	private TreeChopper tree;
 
 	public StripMineJob(MinerConfig cfg, Integer targetY, Goal goal) {
+		this(cfg, targetY, goal, null);
+	}
+
+	private StripMineJob(MinerConfig cfg, Integer targetY, Goal goal, BlockPos treeStart) {
 		this.cfg = cfg;
 		this.targetY = targetY;
 		this.goal = goal;
+		this.treeStart = treeStart;
+	}
+
+	/** A job that chops down the 2x2 tree (or group of trees) the given log belongs to. */
+	public static StripMineJob chopTree(MinerConfig cfg, BlockPos log) {
+		return new StripMineJob(cfg, null, null, log.immutable());
 	}
 
 	public String status() {
+		if (tree != null) {
+			return "§e" + Goal.formatTicks(ticks) + "§r running, §6" + tree.logsMined + "§r logs chopped, now " + phase;
+		}
 		return "§e" + Goal.formatTicks(ticks) + "§r running, §b" + tunnelLength + "§r blocks of tunnel, §a"
 				+ oresMined + "§r ores mined (§a" + resources + "§r items" + perTypeText() + "), now " + phase
 				+ (goal != null ? ". Goal: " + goal.describe() : "");
@@ -136,6 +154,11 @@ public final class StripMineJob {
 	private void updateHud() {
 		List<HudLine> lines = new ArrayList<>();
 		lines.add(new HudLine("Time " + Goal.formatTicks(ticks), 0xFFFFFF55));
+		if (tree != null) {
+			lines.add(new HudLine("Logs " + tree.logsMined, 0xFFFFAA00));
+			hud = List.copyOf(lines);
+			return;
+		}
 		lines.add(new HudLine("Tunnel " + tunnelLength, 0xFF55FFFF));
 		for (Map.Entry<String, int[]> e : perType.entrySet()) {
 			lines.add(new HudLine(e.getKey() + ": " + e.getValue()[0] + " (" + e.getValue()[1] + ")", 0xFF55FF55));
@@ -165,6 +188,12 @@ public final class StripMineJob {
 	// ------------------------------------------------------------------------------------------
 
 	void run() {
+		if (treeStart != null) {
+			tree = new TreeChopper(this, treeStart);
+			updateHud();
+			tree.run();
+			return;
+		}
 		targets = cfg.resolveOres();
 		if (targets.isEmpty()) {
 			throw new StopException("No valid ores configured. Use /config ores add <block>.");
@@ -259,34 +288,102 @@ public final class StripMineJob {
 	}
 
 	/**
-	 * Digs a staircase until the feet are at height {@code y}: straight ahead in the facing
-	 * direction, or (with the spiralstaircase setting) a spiral that turns right every step and
-	 * stays inside a 2x2 column. It keeps walking from step to step without stopping.
+	 * Digs a staircase until the feet are at height {@code y}, in the chosen mode: straight ahead,
+	 * or (spiralstaircase) a 2x2 spiral turning right every step. Before each step it checks for
+	 * lava, water and caves. If the next stair step would run into one, it switches to digging a
+	 * short straight tunnel around it (planned so that it gets a few levels further safely), then
+	 * goes back to the staircase. It keeps walking from step to step without stopping.
 	 */
 	private void goToHeight(int y) {
 		boolean spiral = cfg.spiralStaircase;
-		phase = "digging " + (spiral ? "a spiral" : "a") + " staircase to Y=" + y;
-		msg("Digging " + (spiral ? "a spiral" : "a") + " staircase to Y=" + y + "...");
+		String mode = spiral ? "spiral staircase" : "staircase";
+		msg("Digging a " + mode + " to Y=" + y + "...");
 		Direction dir = forward;
+		Set<BlockPos> ours = new HashSet<>();
+		ours.add(feet());
+		ours.add(feet().above());
+		int detours = 0;
 		try {
 			while (feet().getY() != y) {
 				checkpoint(false);
 				BlockPos cur = feet();
 				int dy = y < cur.getY() ? -1 : 1;
 				BlockPos next = cur.relative(dir).offset(0, dy, 0);
-				boolean last = next.getY() == y;
-				if (!step(cur, next, false, last)) {
-					throw new StopException("Can't continue the staircase at " + fmt(next) + " (" + lastFailure
-							+ "). Stopped to stay safe.");
+				String problem = stairCheck(cur, next, ours);
+				if (problem == null) {
+					phase = "digging " + mode + " to Y=" + y;
+					if (!step(cur, next, false, next.getY() == y)) {
+						problem = lastFailure;
+					} else {
+						ours.addAll(WorldChecks.required(cur, next));
+						if (spiral) {
+							dir = dir.getClockWise();
+						}
+						continue;
+					}
 				}
-				if (spiral) {
-					dir = dir.getClockWise();
+				// The stair step is blocked: tunnel around the problem.
+				phase = "going around " + problem;
+				if (detours++ == 0 || detours % 5 == 0) {
+					msg("Staircase: avoiding " + problem + ", digging around it.");
+				}
+				if (!detour(cur, dy, y, ours)) {
+					throw new StopException("Can't find a safe way to Y=" + y + " from here (" + problem
+							+ "). Stopped to stay safe. Try another spot.");
 				}
 			}
 		} finally {
 			releaseMovement();
 		}
 		moveTo(Vec3.atBottomCenterOf(feet()));
+	}
+
+	/** Why a staircase step is unsafe (lava, water, cave, no floor), or null if it is fine. */
+	private String stairCheck(BlockPos cur, BlockPos next, Set<BlockPos> ours) {
+		if (WorldChecks.moveCost(cur, next) < 0) {
+			for (BlockPos b : WorldChecks.required(cur, next)) {
+				String danger = hazard(b);
+				if (danger != null) {
+					return danger;
+				}
+			}
+			return "no floor at " + fmt(next);
+		}
+		return WorldChecks.stairProblem(cur, next, ours);
+	}
+
+	/**
+	 * Plans and digs a way around a blocked stair step: straight tunnel moves and stair moves
+	 * towards {@code targetY}, avoiding lava, water and caves, until it is a few levels further.
+	 */
+	private boolean detour(BlockPos from, int dy, int targetY, Set<BlockPos> ours) {
+		int remaining = Math.abs(targetY - from.getY());
+		for (int levels : new int[] {Math.min(4, remaining), 1}) {
+			int goalY = from.getY() + dy * levels;
+			Set<BlockPos> known = new HashSet<>(ours);
+			List<BlockPos> path = PathFinder.find(from, c -> c.getY() == goalY, from.atY(goalY), from, 12, 6,
+					(cur, next) -> {
+						int step = next.getY() - cur.getY();
+						if (step != 0 && step != dy) {
+							return -1;
+						}
+						if (stairCheck(cur, next, known) != null) {
+							return -1;
+						}
+						double cost = WorldChecks.moveCost(cur, next);
+						return cost < 0 ? -1 : cost + (step == 0 ? 1 : 0);
+					});
+			if (path != null && !path.isEmpty()) {
+				BlockPos cur = from;
+				for (BlockPos next : path) {
+					ours.addAll(WorldChecks.required(cur, next));
+					cur = next;
+				}
+				ours.add(from);
+				return executePath(path);
+			}
+		}
+		return false;
 	}
 
 	// ------------------------------------------------------------------------------------------
@@ -809,7 +906,7 @@ public final class StripMineJob {
 	}
 
 	/** True if standing with feet in {@code stand} lets the player mine {@code ore} and catch its drop. */
-	private static boolean canMineFrom(BlockPos stand, BlockPos ore) {
+	static boolean canMineFrom(BlockPos stand, BlockPos ore) {
 		if (ore.equals(stand.below())) {
 			// Mining the block we stand on: we drop into its space, so it must have a floor.
 			return isSolidFloor(ore.below()) && hazard(ore) == null;
@@ -910,7 +1007,7 @@ public final class StripMineJob {
 		}
 	}
 
-	private boolean executePath(List<BlockPos> path) {
+	boolean executePath(List<BlockPos> path) {
 		for (int k = 0; k < path.size(); k++) {
 			BlockPos next = path.get(k);
 			BlockPos cur = feet();
@@ -918,8 +1015,8 @@ public final class StripMineJob {
 			if (flat != 1 || Math.abs(next.getY() - cur.getY()) > 1) {
 				return false;
 			}
-			// Only stop exactly (and sneak) at the end of the path; walk smoothly through the rest.
-			if (!step(cur, next, false, k == path.size() - 1)) {
+			// Only stop exactly at the end of the path (or on every block when walking carefully).
+			if (!step(cur, next, false, careful || k == path.size() - 1)) {
 				releaseMovement();
 				return false;
 			}
@@ -938,7 +1035,7 @@ public final class StripMineJob {
 	}
 
 	/** @param exact stop exactly in the middle of {@code next}; otherwise keep walking through it */
-	private boolean step(BlockPos cur, BlockPos next, boolean allowBridge, boolean exact) {
+	boolean step(BlockPos cur, BlockPos next, boolean allowBridge, boolean exact) {
 		List<BlockPos> req = WorldChecks.required(cur, next);
 		for (BlockPos b : req) {
 			String danger = hazard(b);
@@ -1048,7 +1145,7 @@ public final class StripMineJob {
 	}
 
 	/** Breaks a single block within reach. */
-	private boolean mineBlock(BlockPos pos) {
+	boolean mineBlock(BlockPos pos) {
 		MultiPlayerGameMode gm = gameMode();
 		int waited = 0;
 		while (!passable(pos)) {
@@ -1095,7 +1192,7 @@ public final class StripMineJob {
 	 * {@code exact} it slows down (sneaking) and stops right on the spot; without it, it returns as
 	 * soon as the player is inside the block and keeps walking, for smooth movement along a path.
 	 */
-	private boolean moveTo(Vec3 target, boolean exact) {
+	boolean moveTo(Vec3 target, boolean exact) {
 		double best = Double.MAX_VALUE;
 		int stalled = 0;
 		boolean keepWalking = false;
@@ -1292,7 +1389,7 @@ public final class StripMineJob {
 		return s.has(DataComponents.FOOD) && !BAD_FOOD.contains(s.getItem());
 	}
 
-	private void eatIfHungry() {
+	void eatIfHungry() {
 		LocalPlayer p = player();
 		if (p.getFoodData().getFoodLevel() > cfg.eatBelowFood) {
 			return;
@@ -1345,7 +1442,7 @@ public final class StripMineJob {
 		return n;
 	}
 
-	private int freeSlots() {
+	int freeSlots() {
 		Inventory inv = player().getInventory();
 		int free = 0;
 		for (int i = 0; i < 36; i++) {
@@ -1661,7 +1758,7 @@ public final class StripMineJob {
 	// Low level
 	// ------------------------------------------------------------------------------------------
 
-	private LocalPlayer player() {
+	LocalPlayer player() {
 		LocalPlayer p = mc.player;
 		if (p == null) {
 			throw new StopException("Stopped: left the world.");
@@ -1677,7 +1774,7 @@ public final class StripMineJob {
 		return gm;
 	}
 
-	private BlockPos feet() {
+	BlockPos feet() {
 		LocalPlayer p = player();
 		return BlockPos.containing(p.getX(), p.getY() + 0.01, p.getZ());
 	}
@@ -1702,7 +1799,7 @@ public final class StripMineJob {
 		key.setDown(down);
 	}
 
-	private void releaseMovement() {
+	void releaseMovement() {
 		setKey(mc.options.keyUp, false);
 		setKey(mc.options.keyShift, false);
 		setKey(mc.options.keyJump, false);
@@ -1710,7 +1807,7 @@ public final class StripMineJob {
 	}
 
 	/** Waits one game tick, then checks the player is still safe. */
-	private void tick() {
+	void tick() {
 		MinerRunner.yieldTick();
 		LocalPlayer p = player();
 		if (p.isInLava()) {
@@ -1727,7 +1824,7 @@ public final class StripMineJob {
 		}
 	}
 
-	private void msg(String text) {
+	void msg(String text) {
 		MinerRunner.sendChat(text);
 	}
 
