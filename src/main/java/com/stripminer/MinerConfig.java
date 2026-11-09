@@ -31,8 +31,6 @@ public final class MinerConfig {
 	public int branchLength = 5;
 	/** How many blocks the main tunnel moves forward between branches. */
 	public int branchSpacing = 3;
-	/** A torch is placed on the floor of the main tunnel every this many blocks (0 = never). */
-	public int torchInterval = 0;
 	/** Stop after the main tunnel is this long (0 = keep going until stopped). */
 	public int maxTunnelLength = 0;
 	/** How far (horizontally) the miner may dig away from the tunnel to follow an ore vein. */
@@ -87,9 +85,6 @@ public final class MinerConfig {
 						c.branchSpacing = 3; // the old default of 6 was a misunderstanding
 					}
 					if (c.configVersion < 3) {
-						if (c.torchInterval == 28) {
-							c.torchInterval = 0; // torches are now off by default
-						}
 						c.branchLength = Math.min(c.branchLength, 5);
 					}
 					if (c.configVersion < 4 && c.veinRadius == 8) {

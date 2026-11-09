@@ -3,6 +3,14 @@
 Version numbers: the **last** number goes up for small changes and fixes, the **middle** number
 for bigger changes and new features (e.g. 2.0.0 → 2.0.1 → 2.1.0).
 
+## 2.5.0
+- Reworked tree mode: starts at the corner nearest to you and climbs a staircase up the outside
+  edge of the group to the top of the corner tree (the working level); chops every tree that
+  sticks up down to that level (tallest neighbour first, else the closest; mines straight up if
+  the top is in reach, otherwise digs a staircase up); then lowers the level layer by layer until
+  shorter trees are in reach and everything is down.
+- Removed placing torches in the strip mine (the `torchinterval` setting is gone).
+
 ## 2.4.0
 - New tree mode: `/stripmine tree` chops the 2x2 tree (or group of connected 2x2 trees) you are
   looking at: spiral staircase up inside a trunk at the edge, tallest trees cut down to the

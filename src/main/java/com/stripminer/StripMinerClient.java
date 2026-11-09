@@ -158,8 +158,6 @@ public final class StripMinerClient implements ClientModInitializer {
 					+ " standing still.", c -> c.branchLength, (c, v) -> c.branchLength = v),
 			intOpt("branchspacing", true, 2, 64, "How many blocks the main tunnel moves forward between two pairs"
 					+ " of branches.", c -> c.branchSpacing, (c, v) -> c.branchSpacing = v),
-			intOpt("torchinterval", true, 0, 256, "Place a torch on the tunnel floor every this many blocks."
-					+ " 0 = no torches.", c -> c.torchInterval, (c, v) -> c.torchInterval = v),
 			intOpt("maxlength", true, 0, 100000, "Always stop once the main tunnel is this long. 0 = no limit."
 					+ " For a one-off limit use /stripmine start length <blocks> instead.",
 					c -> c.maxTunnelLength, (c, v) -> c.maxTunnelLength = v),
@@ -275,6 +273,7 @@ public final class StripMinerClient implements ClientModInitializer {
 				"it digs a spiral staircase up inside the nearest trunk (and up the tallest one), then always",
 				"mines the highest layer of logs left - the tallest tree comes down to the next tallest, and so",
 				"on until they're level, then the whole group comes down layer by layer. Then it picks up the wood.",
+				"(It starts at the corner nearest to you and climbs a staircase up the side of the group.)",
 				"Bring an axe. You can also bind a key for it in Options > Controls > Strip Miner."));
 		HELP.put("stop", List.of("§6stop§r - stop mining right away. Your settings stay as they are."));
 		HELP.put("pause", List.of(
@@ -286,14 +285,14 @@ public final class StripMinerClient implements ClientModInitializer {
 		HELP.put("config", List.of(
 				"§6config§r - change how the miner works. §b/stripmine config§r lists everything.",
 				"§b/stripmine config settings <name> <value>§r - tunnel shape: branchlength, branchspacing,"
-						+ " torchinterval, maxlength, veinradius, targety, spiralstaircase",
+						+ " maxlength, veinradius, targety, spiralstaircase",
 				"§b/stripmine config <name> <value>§r - behaviour: clustersize, minearoundores, isolatelava, collectgravel,"
 						+ " compressfullstacks, dropjunk, eatbelowfood, stopbelowhealth, keeptooldurability",
 				"§b/stripmine config ores ...§r - which ores to look for",
 				"Put §bhelp§r after any setting to see what it does, e.g. §b/stripmine config settings veinradius help"));
 		HELP.put("settings", List.of(
 				"§6config settings§r - the shape of the tunnel:",
-				"§bbranchlength§r, §bbranchspacing§r, §btorchinterval§r, §bmaxlength§r, §bveinradius§r, §btargety§r,"
+				"§bbranchlength§r, §bbranchspacing§r, §bmaxlength§r, §bveinradius§r, §btargety§r,"
 						+ " §bspiralstaircase",
 				"Usage: §b/stripmine config settings <name> <value>§r, or §b... <name> help§r to learn more."));
 		HELP.put("orelist", List.of(

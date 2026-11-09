@@ -42,9 +42,6 @@ It always finishes the 5 blocks before going after ores. For example: mines 3 bl
 diamond → mines the last 2 blocks → mines the diamond(s) → goes back to the tunnel → mines the
 other side.
 
-Torches are **off by default**. Turn them on with `/config torchinterval 28` to place one on the
-tunnel floor every 28 blocks.
-
 ### Lava safety
 
 - It never mines a block that has lava next to it, and never steps into a space that touches lava.
@@ -79,7 +76,7 @@ tunnel floor every 28 blocks.
   that stack and the rest is thrown away. All other stone-type blocks (cobblestone, deepslate,
   dirt, tuff, ...) are treated as throwaway blocks: when the inventory is almost full it throws
   them behind it, keeping one stack to bridge gaps and block off lava.
-- Moves torches, food and filler blocks from your inventory into the hotbar when needed.
+- Moves food, filler blocks and torches (for collecting gravel) into the hotbar when needed.
 - Re-mines gravel and sand that falls into the tunnel.
 
 ## Usage
@@ -112,15 +109,20 @@ dropped in brackets, e.g. `Diamond: 5 (12)`.
 ### Tree mode: `/stripmine tree`
 
 Look at a log of a **2x2 tree** (big spruce, jungle or dark oak) and type `/stripmine tree`
-(or bind a key under *Controls → Strip Miner*). If several 2x2 trees stand right next to each other,
-it chops the whole group:
+(or bind a key under *Controls → Strip Miner*). If several 2x2 trees stand right next to each
+other, it chops the whole group:
 
-1. It digs a **spiral staircase up inside the trunk** of the nearest tree (the edge of the group).
-   If another tree is taller, it walks over and spirals up that one too.
-2. It always mines the **highest layer of logs** left: the tallest tree comes down to the height
-   of the next tallest, then those come down together, and so on until all trees are level.
-   Then the whole group comes down layer by layer.
-3. It picks up the wood (and saplings) that dropped.
+1. It picks the **corner** of the group nearest to you and digs a **staircase up along the outside
+   edge** of the group (moving inwards only if it has to) until it stands on top of the corner
+   tree. That height is the **working level**.
+2. Every tree that sticks up above the working level is chopped down to it, one at a time: the
+   **tallest tree next to the current one** first, or the **closest** one if no neighbour sticks
+   up. If the top is in reach it mines straight up from where it stands; otherwise it digs a
+   staircase up until it can reach the top.
+3. When nothing sticks up any more, it **mines the working level away layer by layer**. That
+   lowers the level until shorter trees (for example in the middle) come into reach, and finally
+   takes the whole group down to the ground.
+4. It picks up the wood (and saplings) that dropped.
 
 Up in the trees it stops exactly on every block and never steps where there is no floor, so it
 can't fall. Bring an axe.
@@ -136,7 +138,6 @@ see what it does, its current value and its default.
 |---|---|---|
 | `branchlength` | 5 | Blocks mined to each side (at most 5, the furthest a player can reach) |
 | `branchspacing` | 3 | Blocks forward between branches |
-| `torchinterval` | 0 | Blocks between floor torches (0 = no torches) |
 | `maxlength` | 0 | Always stop after this many tunnel blocks (0 = never) |
 | `targety` | -58 | Height `/stripmine start` digs stairs to |
 | `spiralstaircase` | false | Dig a 2x2 spiral staircase (turning right every step) instead of a straight one |
@@ -164,11 +165,11 @@ You can also bind a key for start/stop under *Options → Controls → Key Binds
 Settings are saved in `config/stripminer.json`.
 
 **Bring:** a pickaxe in your **hotbar** (iron or better for diamonds), a shovel helps with gravel,
-torches, some food, a crafting table, some cobblestone, and gravel or sand for lava.
+a few torches (to collect gravel), some food, a crafting table, some cobblestone, and gravel or sand for lava.
 
 **Tips**
 - Press **F3 + P** to turn off pause-on-lost-focus so it keeps going while you're in another window.
-- The miner doesn't fight mobs. Check on it now and then (torches are off unless you turn them on). It stops if your
+- The miner doesn't fight mobs. Check on it now and then. It stops if your
   health gets low.
 - If a server has its own `/config` command, this mod's `/config` hides it while the mod is installed.
 - Some multiplayer servers don't allow automation mods. Check the server rules first.

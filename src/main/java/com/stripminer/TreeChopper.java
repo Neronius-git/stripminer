@@ -23,11 +23,14 @@ import static com.stripminer.WorldChecks.fmt;
  * each other:
  * <ol>
  * <li>Finds every log of the same kind connected to the one the player looked at.</li>
- * <li>Digs a spiral staircase up inside the trunk of the tree nearest to the player (the edge of
- * the group). If another tree is taller, it walks over and spirals up that one too.</li>
- * <li>Then it always mines the highest layer of logs that is left: the tallest tree comes down
- * to the height of the next tallest, then those come down together, and so on until they are all
- * level, after which the whole group is taken down layer by layer.</li>
+ * <li>Picks the corner of the group nearest to the player and digs a staircase up along the
+ * outside edge of the group until it stands on top of the corner tree. That height is the
+ * working level.</li>
+ * <li>Every tree sticking up above the working level is chopped down to it: the tallest tree next
+ * to the current one first (mined from where it stands if the top is in reach, otherwise it digs a
+ * staircase up), or the closest one if no neighbour sticks up.</li>
+ * <li>When nothing sticks up any more, the working level is mined away layer by layer. That brings
+ * shorter trees (e.g. in the middle) into reach and finally takes the whole group down.</li>
  * <li>Finally it picks up the dropped items.</li>
  * </ol>
  * Up in the trees it stops exactly on every block and never steps where there is no floor, so it
@@ -41,6 +44,8 @@ final class TreeChopper {
 	private Block logType;
 	private final Set<BlockPos> logs = new HashSet<>();
 	private int baseY;
+	/** The working level: the height of the log tops the player walks on. */
+	private int floorY;
 	int logsMined;
 
 	/** A 2x2 trunk, by its north-west column. */
@@ -84,8 +89,9 @@ final class TreeChopper {
 		job.msg("Found " + squares.size() + " tree" + (squares.size() == 1 ? "" : "s") + " (" + logs.size()
 				+ " logs, " + (top - baseY + 1) + " blocks tall). Climbing up...");
 
-		climb(squares);
-		chopTopDown();
+		climbAtCorner(squares);
+		floorY = job.feet().getY() - 1;
+		workDown(squares);
 		collectItems();
 		job.msg("§aDone: chopped " + logsMined + " logs.");
 	}
@@ -153,51 +159,87 @@ final class TreeChopper {
 	}
 
 	// ------------------------------------------------------------------------------------------
-	// Climbing up
+	// Climbing up at a corner
 	// ------------------------------------------------------------------------------------------
 
-	private void climb(List<Square> squares) {
-		Vec3 me = job.player().position();
-		Square edge = squares.stream()
-				.min(Comparator.comparingDouble(s -> me.distanceToSqr(s.x() + 1, me.y, s.z() + 1)))
-				.orElseThrow();
-		Square tallest = squares.stream().max(Comparator.comparingInt(this::top)).orElseThrow();
-		spiralUp(edge);
-		if (tallest != edge && top(tallest) + 1 > job.feet().getY()) {
-			spiralUp(tallest);
+	private Set<Long> columns() {
+		Set<Long> cols = new HashSet<>();
+		for (BlockPos p : logs) {
+			cols.add(key(p.getX(), p.getZ()));
 		}
+		return cols;
 	}
 
-	/** Gets into the trunk of {@code sq} and digs a spiral staircase up inside it to its top. */
-	private void spiralUp(Square sq) {
-		job.phase = "climbing the tree";
-		BlockPos me = job.feet();
-		if (!sq.contains(me)) {
-			int y = me.getY();
-			List<BlockPos> path = PathFinder.find(me, c -> sq.contains(c) && Math.abs(c.getY() - y) <= 1,
-					new BlockPos(sq.x(), y, sq.z()), me, 16, 6);
-			if (path == null || !job.executePath(path)) {
-				throw new StopException("Can't get into the trunk of the tree at " + sq.x() + " " + sq.z() + ".");
+	private static boolean inColumns(Set<Long> cols, BlockPos p) {
+		return cols.contains(key(p.getX(), p.getZ()));
+	}
+
+	/** A column on the outside edge of the group (a side touches a column without logs). */
+	private static boolean onEdge(Set<Long> cols, BlockPos p) {
+		for (Direction d : Direction.Plane.HORIZONTAL) {
+			if (!cols.contains(key(p.getX() + d.getStepX(), p.getZ() + d.getStepZ()))) {
+				return true;
 			}
 		}
-		int top = top(sq);
-		List<int[]> cells = sq.cells();
-		while (job.feet().getY() <= top) {
-			BlockPos cur = job.feet();
-			int i = 0;
-			while (cells.get(i)[0] != cur.getX() || cells.get(i)[1] != cur.getZ()) {
-				i++;
+		return false;
+	}
+
+	/**
+	 * Picks the corner of the group nearest to the player and digs a staircase up along the
+	 * outside edge of the group (moving inwards only when it has to) until it stands on top of the
+	 * corner tree. That height is the working level.
+	 */
+	private void climbAtCorner(List<Square> squares) {
+		Set<Long> cols = columns();
+		int minX = Integer.MAX_VALUE, minZ = Integer.MAX_VALUE, maxX = Integer.MIN_VALUE, maxZ = Integer.MIN_VALUE;
+		for (Square s : squares) {
+			minX = Math.min(minX, s.x());
+			minZ = Math.min(minZ, s.z());
+			maxX = Math.max(maxX, s.x() + 1);
+			maxZ = Math.max(maxZ, s.z() + 1);
+		}
+		Vec3 me = job.player().position();
+		int[][] corners = {{minX, minZ}, {maxX, minZ}, {minX, maxZ}, {maxX, maxZ}};
+		int[] corner = corners[0];
+		for (int[] c : corners) {
+			if (me.distanceToSqr(c[0] + 0.5, me.y, c[1] + 0.5) < me.distanceToSqr(corner[0] + 0.5, me.y, corner[1] + 0.5)) {
+				corner = c;
 			}
-			int[] n = cells.get((i + 1) % 4);
-			BlockPos next = new BlockPos(n[0], cur.getY() + 1, n[1]);
-			if (!WorldChecks.isSolidFloor(next.below())) {
-				break; // reached the top of this trunk
-			}
-			countLogs(WorldChecks.required(cur, next));
-			if (!job.step(cur, next, false, true)) {
-				throw new StopException("Couldn't climb the tree at " + fmt(next) + " (" + job.lastFailure + ").");
-			}
-			treeCheckpoint();
+		}
+		int[] cornerFinal = corner;
+		Square cornerTree = squares.stream()
+				.min(Comparator.comparingDouble(s -> Math.pow(s.x() + 0.5 - cornerFinal[0], 2) + Math.pow(s.z() + 0.5 - cornerFinal[1], 2)))
+				.orElseThrow();
+		int targetFeet = top(cornerTree) + 1;
+		BlockPos from = job.feet();
+		if (from.getY() >= targetFeet) {
+			return;
+		}
+		job.phase = "digging stairs up the side of the trees";
+		BlockPos center = new BlockPos((minX + maxX) / 2, (from.getY() + targetFeet) / 2, (minZ + maxZ) / 2);
+		int radiusXZ = Math.max(maxX - minX, maxZ - minZ) / 2 + 10;
+		int radiusY = (targetFeet - from.getY()) / 2 + 4;
+		List<BlockPos> path = PathFinder.find(from,
+				c -> c.getY() == targetFeet && inColumns(cols, c) && isLog(c.below()),
+				new BlockPos(cornerTree.x(), targetFeet, cornerTree.z()), center, radiusXZ, radiusY,
+				(cur, next) -> {
+					double cost = WorldChecks.moveCost(cur, next);
+					if (cost < 0) {
+						return -1;
+					}
+					// Stay on the outside edge of the group where possible.
+					if (inColumns(cols, next) && !onEdge(cols, next)) {
+						cost += 3;
+					}
+					return cost;
+				});
+		if (path == null) {
+			throw new StopException("Can't dig a staircase up the side of these trees from here. Stand next to"
+					+ " a corner of the trees and try again.");
+		}
+		countLogs(pathBlocks(from, path));
+		if (!job.executePath(path)) {
+			throw new StopException("Couldn't climb the trees (" + job.lastFailure + ").");
 		}
 	}
 
@@ -205,43 +247,116 @@ final class TreeChopper {
 	// Chopping down
 	// ------------------------------------------------------------------------------------------
 
-	/** Always mines the highest remaining layer of logs, so taller trees come down to the others first. */
-	private void chopTopDown() {
+	/**
+	 * Works the group down from the working level: first every tree that sticks up above it is
+	 * chopped down to it (the tallest neighbour of the current tree first, otherwise the closest),
+	 * then, when nothing sticks up any more, the level itself is mined away layer by layer, which
+	 * brings shorter trees into reach and finally takes everything down to the ground.
+	 */
+	private void workDown(List<Square> squares) {
 		Set<BlockPos> failed = new HashSet<>();
 		while (true) {
+			treeCheckpoint();
 			logs.removeIf(p -> !isLog(p));
 			List<BlockPos> left = new ArrayList<>(logs);
 			left.removeAll(failed);
 			if (left.isEmpty()) {
 				break;
 			}
-			int layer = left.stream().mapToInt(BlockPos::getY).max().orElseThrow();
-			job.phase = "chopping (Y=" + layer + ", " + logs.size() + " logs left)";
-			BlockPos me = job.feet();
-			BlockPos log = left.stream().filter(p -> p.getY() == layer)
-					.min(Comparator.comparingDouble(p -> p.distSqr(me))).orElseThrow();
-			treeCheckpoint();
-			if (!chop(log)) {
-				failed.add(log);
+			List<BlockPos> above = left.stream().filter(p -> p.getY() > floorY).toList();
+			if (!above.isEmpty()) {
+				Square tree = nextTree(squares, above);
+				Set<BlockPos> targets = new HashSet<>();
+				for (BlockPos p : above) {
+					if (tree == null || tree.contains(p)) {
+						targets.add(p);
+					}
+				}
+				job.phase = "chopping a tree down to Y=" + (floorY + 1);
+				chopDown(targets, failed);
+				continue;
 			}
+			// Nothing sticks up: lower the working level by mining the layer we stand on.
+			int layer = left.stream().mapToInt(BlockPos::getY).max().orElseThrow();
+			job.phase = "lowering the level (Y=" + layer + ", " + logs.size() + " logs left)";
+			Set<BlockPos> targets = new HashSet<>();
+			for (BlockPos p : left) {
+				if (p.getY() == layer) {
+					targets.add(p);
+				}
+			}
+			chopDown(targets, failed);
+			floorY = layer - 1;
 		}
 		if (!failed.isEmpty()) {
 			job.msg("§eLeft " + failed.size() + " log(s) it couldn't safely reach.");
 		}
 	}
 
-	/** Walks to a spot next to the log (digging through leaves if needed) and mines it. */
-	private boolean chop(BlockPos log) {
+	/** The tallest tree next to the one the player is on that still sticks up, else the closest such tree. */
+	private Square nextTree(List<Square> squares, List<BlockPos> above) {
+		BlockPos me = job.feet();
+		List<Square> sticking = new ArrayList<>();
+		for (Square s : squares) {
+			if (above.stream().anyMatch(s::contains)) {
+				sticking.add(s);
+			}
+		}
+		if (sticking.isEmpty()) {
+			return null; // only odd logs outside the 2x2 trunks are left
+		}
+		Square current = squares.stream()
+				.min(Comparator.comparingDouble(s -> Math.pow(s.x() + 1 - (me.getX() + 0.5), 2) + Math.pow(s.z() + 1 - (me.getZ() + 0.5), 2)))
+				.orElseThrow();
+		List<Square> neighbours = sticking.stream().filter(s -> s == current || touches(s, current)).toList();
+		if (!neighbours.isEmpty()) {
+			return neighbours.stream().max(Comparator.comparingInt(this::top)).orElseThrow();
+		}
+		return sticking.stream()
+				.min(Comparator.comparingDouble(s -> Math.pow(s.x() + 1 - (me.getX() + 0.5), 2) + Math.pow(s.z() + 1 - (me.getZ() + 0.5), 2)))
+				.orElseThrow();
+	}
+
+	/** True if two trunks share a side. */
+	private static boolean touches(Square a, Square b) {
+		int dx = Math.abs(a.x() - b.x());
+		int dz = Math.abs(a.z() - b.z());
+		return (dx == 2 && dz <= 1) || (dz == 2 && dx <= 1);
+	}
+
+	/** Mines the given logs, always the highest one first (closest among equals). */
+	private void chopDown(Set<BlockPos> targets, Set<BlockPos> failed) {
+		while (true) {
+			targets.removeIf(p -> !isLog(p) || failed.contains(p));
+			if (targets.isEmpty()) {
+				return;
+			}
+			treeCheckpoint();
+			BlockPos me = job.feet();
+			BlockPos log = targets.stream()
+					.max(Comparator.<BlockPos>comparingInt(BlockPos::getY).thenComparingDouble(p -> -p.distSqr(me)))
+					.orElseThrow();
+			if (!reachAndMine(log)) {
+				failed.add(log);
+			}
+		}
+	}
+
+	/**
+	 * Mines a log from where the player stands if it is in reach; otherwise walks (or digs a
+	 * staircase up) to a spot from where it can be reached.
+	 */
+	private boolean reachAndMine(BlockPos log) {
 		for (int attempt = 0; attempt < 3; attempt++) {
 			BlockPos me = job.feet();
-			if (StripMineJob.canMineFrom(me, log)) {
+			if (canReach(me, log)) {
 				if (job.mineBlock(log)) {
 					logsMined++;
 					return true;
 				}
 				return false;
 			}
-			List<BlockPos> path = PathFinder.find(me, c -> StripMineJob.canMineFrom(c, log), log, me, 16, 12);
+			List<BlockPos> path = PathFinder.find(me, c -> canReach(c, log), log, me, 16, 16);
 			if (path == null) {
 				return false;
 			}
@@ -249,6 +364,22 @@ final class TreeChopper {
 			job.executePath(path);
 		}
 		return false;
+	}
+
+	/** Can a player standing in {@code stand} mine {@code target} without falling? */
+	private static boolean canReach(BlockPos stand, BlockPos target) {
+		if (target.equals(stand) || target.equals(stand.above())) {
+			return false;
+		}
+		if (target.equals(stand.below())) {
+			// Mining the block we stand on: we drop one block, so there must be a floor under it.
+			return WorldChecks.isSolidFloor(target.below()) && WorldChecks.hazard(target) == null;
+		}
+		double ex = stand.getX() + 0.5, ey = stand.getY() + 1.62, ez = stand.getZ() + 0.5;
+		double dx = Math.max(Math.max(target.getX() - ex, 0), ex - (target.getX() + 1));
+		double dy = Math.max(Math.max(target.getY() - ey, 0), ey - (target.getY() + 1));
+		double dz = Math.max(Math.max(target.getZ() - ez, 0), ez - (target.getZ() + 1));
+		return dx * dx + dy * dy + dz * dz <= 4.3 * 4.3;
 	}
 
 	private static List<BlockPos> pathBlocks(BlockPos from, List<BlockPos> path) {

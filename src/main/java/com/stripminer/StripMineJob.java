@@ -84,7 +84,6 @@ public final class StripMineJob {
 	private Set<Block> targets;
 	private Direction forward;
 	private int tunnelLength;
-	private int lastTorchAt;
 	private int oresMined;
 	/** Items (diamonds, raw iron, ...) picked up from the ores that were mined. */
 	private int resources;
@@ -100,7 +99,6 @@ public final class StripMineJob {
 	/** One line of the on-screen overlay. */
 	public record HudLine(String text, int color) {
 	}
-	private boolean warnedNoTorches;
 	private boolean warnedNoTable;
 	volatile String phase = "starting";
 	String lastFailure = "";
@@ -215,10 +213,6 @@ public final class StripMineJob {
 		}
 
 		tunnelLength = 0;
-		lastTorchAt = 0;
-		if (cfg.torchInterval > 0) {
-			placeTorchHere();
-		}
 
 		while (true) {
 			checkGoal();
@@ -245,10 +239,6 @@ public final class StripMineJob {
 				segment.add(next);
 				segment.add(next.above());
 				tunnelLength++;
-				if (cfg.torchInterval > 0 && tunnelLength - lastTorchAt >= cfg.torchInterval) {
-					placeTorchHere();
-					lastTorchAt = tunnelLength;
-				}
 			}
 			BlockPos newHome = feet();
 			phase = "checking tunnel for ores";
@@ -1243,7 +1233,7 @@ public final class StripMineJob {
 	}
 
 	// ------------------------------------------------------------------------------------------
-	// Items: tools, torches, filler blocks, food, junk
+	// Items: tools, filler blocks, food, junk
 	// ------------------------------------------------------------------------------------------
 
 	private boolean usable(ItemStack s) {
@@ -1341,30 +1331,6 @@ public final class StripMineJob {
 			return what.test(inv.getItem(target)) ? target : -1;
 		}
 		return -1;
-	}
-
-	/** Places a torch on the floor of the block the player is standing in. */
-	private void placeTorchHere() {
-		BlockPos cell = feet();
-		BlockPos floor = cell.below();
-		if (!isSolidFloor(floor) || !WorldChecks.level().getBlockState(cell).isAir()) {
-			return;
-		}
-		int slot = ensureInHotbar(s -> s.is(Items.TORCH));
-		if (slot < 0) {
-			if (!warnedNoTorches) {
-				msg("§eNo torches in your inventory - continuing without placing torches.");
-				warnedNoTorches = true;
-			}
-			return;
-		}
-		warnedNoTorches = false;
-		player().getInventory().setSelectedSlot(slot);
-		Vec3 hit = Vec3.atCenterOf(floor).add(0, 0.5, 0);
-		lookAt(hit);
-		MinerRunner.onMain(() -> gameMode().useItemOn(player(), InteractionHand.MAIN_HAND, new BlockHitResult(hit, Direction.UP, floor, false)));
-		swingHand();
-		tick();
 	}
 
 	/** Places a filler block (cobblestone, dirt, ...) against the side of {@code against} facing {@code dir}. */
