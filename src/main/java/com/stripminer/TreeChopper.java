@@ -219,26 +219,34 @@ final class TreeChopper {
 		BlockPos center = new BlockPos((minX + maxX) / 2, (from.getY() + targetFeet) / 2, (minZ + maxZ) / 2);
 		int radiusXZ = Math.max(maxX - minX, maxZ - minZ) / 2 + 10;
 		int radiusY = (targetFeet - from.getY()) / 2 + 4;
-		List<BlockPos> path = PathFinder.find(from,
-				c -> c.getY() == targetFeet && inColumns(cols, c) && isLog(c.below()),
-				new BlockPos(cornerTree.x(), targetFeet, cornerTree.z()), center, radiusXZ, radiusY,
-				(cur, next) -> {
-					double cost = WorldChecks.moveCost(cur, next);
-					if (cost < 0) {
-						return -1;
-					}
-					// Stay on the outside edge of the group where possible.
-					if (inColumns(cols, next) && !onEdge(cols, next)) {
-						cost += 3;
-					}
-					return cost;
-				});
-		if (path == null) {
-			throw new StopException("Can't dig a staircase up the side of these trees from here. Stand next to"
-					+ " a corner of the trees and try again.");
+		// If a step fails (e.g. something changed), plan again from where the player is.
+		for (int attempt = 0; attempt < 5 && job.feet().getY() < targetFeet; attempt++) {
+			BlockPos here = job.feet();
+			List<BlockPos> path = PathFinder.find(here,
+					c -> c.getY() == targetFeet && inColumns(cols, c) && isLog(c.below()),
+					new BlockPos(cornerTree.x(), targetFeet, cornerTree.z()), center, radiusXZ, radiusY,
+					(cur, next) -> {
+						double cost = WorldChecks.moveCost(cur, next);
+						if (cost < 0) {
+							return -1;
+						}
+						// Stay on the outside edge of the group where possible.
+						if (inColumns(cols, next) && !onEdge(cols, next)) {
+							cost += 3;
+						}
+						return cost;
+					});
+			if (path == null) {
+				throw new StopException("Can't dig a staircase up the side of these trees from here. Stand next to"
+						+ " a corner of the trees and try again.");
+			}
+			countLogs(pathBlocks(here, path));
+			if (job.executePath(path)) {
+				return;
+			}
+			job.releaseMovement();
 		}
-		countLogs(pathBlocks(from, path));
-		if (!job.executePath(path)) {
+		if (job.feet().getY() < targetFeet) {
 			throw new StopException("Couldn't climb the trees (" + job.lastFailure + ").");
 		}
 	}

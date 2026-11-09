@@ -178,12 +178,12 @@ a few torches (to collect gravel), some food, a crafting table, some cobblestone
 
 1. Install [Fabric Loader](https://fabricmc.net/use/) for Minecraft 26.3 and put
    [Fabric API](https://modrinth.com/mod/fabric-api) in your `mods` folder.
-2. Download the jar: open the **Actions** tab of this repository, click the latest successful
-   **build** run, and download the **stripminer-mod-jar** artifact. Unzip it and put
-   `stripminer-<version>.jar` (not the `-sources` one) in your `.minecraft/mods` folder.
+2. Download the jar from the [Releases page](https://github.com/Neronius-git/stripminer/releases)
+   (the newest one is at the top) and put `stripminer-26.3.X.x.jar` in your `.minecraft/mods`
+   folder.
 
-The version number goes up with every update (see [CHANGELOG.md](CHANGELOG.md)): the last
-number for small changes and fixes, the middle number for new features.
+Version numbers are **26.3.X.x** (see [CHANGELOG.md](CHANGELOG.md)): `26.3` is the Minecraft
+version, **X** goes up for new features, **x** for small changes and fixes.
 
 ## Building it yourself
 
