@@ -6,10 +6,10 @@ choose, mines the ores it reveals, picks up the drops and avoids lava.
 ## What it does
 
 ```
-   side view of a branch          top view
+   side view of a branch           top view
                                    LLLLL@RRRRR   @ = where the player stands (2 high)
-   LLLLL@RRRRR  <- head height         |         L/R = 1 block high holes at head height
-        @                              |  3 blocks forward
+   LLLLL@RRRRR  <- head height          |        L/R = 1 block high holes at head height
+        @                               |        3 blocks forward
                                    LLLLL@RRRRR
 ```
 
