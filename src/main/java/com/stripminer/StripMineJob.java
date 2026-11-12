@@ -289,7 +289,8 @@ public final class StripMineJob {
 		String mode = spiral ? "spiral staircase" : "staircase";
 		msg("Digging a " + mode + " to Y=" + y + "...");
 		Direction dir = forward;
-		Set<BlockPos> ours = new HashSet<>();
+		// The space we start in (an existing tunnel, room or the open air) is ours, not a cave.
+		Set<BlockPos> ours = WorldChecks.openSpaceAround(feet(), 200);
 		ours.add(feet());
 		ours.add(feet().above());
 		int detours = 0;

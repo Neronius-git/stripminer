@@ -51,7 +51,7 @@ public final class WorldChecks {
 			if (isWater(b)) {
 				return "water at " + fmt(b);
 			}
-			if (passable(b) && !ours.contains(b)) {
+			if (isCave(b, ours)) {
 				return "a cave at " + fmt(b);
 			}
 			for (Direction d : Direction.values()) {
@@ -62,12 +62,101 @@ public final class WorldChecks {
 				if (isWater(n)) {
 					return "water next to " + fmt(b);
 				}
-				if (!passable(b) && passable(n)) {
+				if (!passable(b) && isCave(n, own)) {
 					return "a cave at " + fmt(n);
 				}
 			}
 		}
 		return null;
+	}
+
+	/**
+	 * True if {@code pos} is open space belonging to a cave: underground (no open sky above it), not
+	 * part of our own digging, and connected to at least {@link #CAVE_SIZE} open blocks (so small
+	 * air pockets don't count).
+	 */
+	public static boolean isCave(BlockPos pos, Set<BlockPos> own) {
+		if (own.contains(pos) || !passable(pos) || seesSky(pos)) {
+			return false;
+		}
+		Set<BlockPos> seen = new HashSet<>();
+		java.util.ArrayDeque<BlockPos> queue = new java.util.ArrayDeque<>();
+		seen.add(pos);
+		queue.add(pos);
+		while (!queue.isEmpty() && seen.size() < CAVE_SIZE) {
+			BlockPos p = queue.poll();
+			for (Direction d : Direction.values()) {
+				BlockPos n = p.relative(d);
+				if (seen.size() < CAVE_SIZE && !seen.contains(n) && !own.contains(n) && passable(n)) {
+					if (seesSky(n)) {
+						return false; // connected to the surface: open air, not a cave
+					}
+					seen.add(n);
+					queue.add(n);
+				}
+			}
+		}
+		return seen.size() >= CAVE_SIZE;
+	}
+
+	private static final int CAVE_SIZE = 6;
+
+	/** Remembers recent sky checks; cleared now and then (blocks change as we dig). */
+	private static final java.util.Map<BlockPos, Boolean> SKY_CACHE = new java.util.HashMap<>();
+	private static long skyCacheTime;
+
+	/** True if nothing solid is above {@code pos} (it is outside, under the open sky). */
+	public static boolean seesSky(BlockPos pos) {
+		long now = System.currentTimeMillis();
+		if (now - skyCacheTime > 2000 || SKY_CACHE.size() > 50000) {
+			SKY_CACHE.clear();
+			skyCacheTime = now;
+		}
+		Boolean cached = SKY_CACHE.get(pos);
+		if (cached != null) {
+			return cached;
+		}
+		Level level = level();
+		boolean sky = true;
+		BlockPos.MutableBlockPos p = pos.mutable();
+		for (int i = 0; i < 400; i++) {
+			p.move(Direction.UP);
+			if (!level.isLoaded(p)) {
+				break; // above the world: nothing solid on the way
+			}
+			if (!passable(p) && !level.getBlockState(p).isAir()) {
+				sky = false;
+				break;
+			}
+		}
+		SKY_CACHE.put(pos.immutable(), sky);
+		return sky;
+	}
+
+	/**
+	 * The open space the player is standing in (up to {@code limit} blocks): it is ours, so the
+	 * staircase may open into it without that counting as breaking into a cave.
+	 */
+	public static Set<BlockPos> openSpaceAround(BlockPos feet, int limit) {
+		Set<BlockPos> space = new HashSet<>();
+		java.util.ArrayDeque<BlockPos> queue = new java.util.ArrayDeque<>();
+		for (BlockPos start : List.of(feet, feet.above())) {
+			if (passable(start)) {
+				space.add(start);
+				queue.add(start);
+			}
+		}
+		while (!queue.isEmpty() && space.size() < limit) {
+			BlockPos p = queue.poll();
+			for (Direction d : Direction.values()) {
+				BlockPos n = p.relative(d);
+				if (space.size() < limit && !space.contains(n) && passable(n) && n.distManhattan(feet) <= 6) {
+					space.add(n);
+					queue.add(n);
+				}
+			}
+		}
+		return space;
 	}
 
 	/** True if the player can stand/walk in this block without mining it. */

@@ -4,6 +4,12 @@ Version numbers are **26.3.X.x**: `26.3` is the Minecraft version, **X** goes up
 and new features, **x** for small changes and fixes (e.g. 26.3.5.0 → 26.3.5.1 → 26.3.6.0).
 Older versions were called 2.0.0-2.5.0; they are listed here under their new numbers.
 
+## 26.3.5.2
+- Fixed the adaptive staircase stopping right away: open air above ground (and the tunnel or
+  room you start in) was taken for a cave. A cave is now only open space underground (no sky
+  above) that is bigger than a small pocket.
+- Rewrote the README, including tree mode.
+
 ## 26.3.5.1
 - Fixed tree mode stopping with "no floor to stand on": paths no longer plan to stand on a block
   that an earlier step of the same path digs away, and the climb re-plans instead of giving up.
