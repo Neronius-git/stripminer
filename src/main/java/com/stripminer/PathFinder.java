@@ -7,9 +7,11 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.PriorityQueue;
+import java.util.Set;
 import java.util.function.Predicate;
 
 /**
@@ -32,6 +34,16 @@ public final class PathFinder {
 	 */
 	public static List<BlockPos> find(BlockPos start, Predicate<BlockPos> goal, BlockPos target,
 			BlockPos center, int radiusXZ, int radiusY) {
+		return find(start, goal, target, center, radiusXZ, radiusY, WorldChecks::moveCost);
+	}
+
+	/** Cost of moving from one cell to a neighbouring one, or a negative number if not allowed. */
+	public interface MoveCost {
+		double cost(BlockPos cur, BlockPos next);
+	}
+
+	public static List<BlockPos> find(BlockPos start, Predicate<BlockPos> goal, BlockPos target,
+			BlockPos center, int radiusXZ, int radiusY, MoveCost moveCost) {
 		PriorityQueue<Node> open = new PriorityQueue<>(Comparator.comparingDouble(Node::f));
 		Map<BlockPos, Double> best = new HashMap<>();
 		open.add(new Node(start, 0, heuristic(start, target), null));
@@ -50,6 +62,7 @@ public final class PathFinder {
 				Collections.reverse(path);
 				return path;
 			}
+			Set<BlockPos> dugOnTheWay = null;
 			for (Direction d : Direction.Plane.HORIZONTAL) {
 				for (int dy = -1; dy <= 1; dy++) {
 					BlockPos next = n.pos.relative(d).offset(0, dy, 0);
@@ -58,8 +71,16 @@ public final class PathFinder {
 							|| Math.abs(next.getY() - center.getY()) > radiusY) {
 						continue;
 					}
-					double cost = WorldChecks.moveCost(n.pos, next);
+					double cost = moveCost.cost(n.pos, next);
 					if (cost < 0) {
+						continue;
+					}
+					// Never plan to stand on a block that an earlier step of this same path digs away
+					// (e.g. a staircase that turns back on itself).
+					if (dugOnTheWay == null) {
+						dugOnTheWay = dugOnTheWay(n);
+					}
+					if (dugOnTheWay.contains(next.below())) {
 						continue;
 					}
 					double g = n.g + cost;
@@ -71,6 +92,16 @@ public final class PathFinder {
 			}
 		}
 		return null;
+	}
+
+	/** The blocks the path up to {@code n} digs (looking back a limited number of steps). */
+	private static Set<BlockPos> dugOnTheWay(Node n) {
+		Set<BlockPos> dug = new HashSet<>();
+		int depth = 0;
+		for (Node k = n; k.parent != null && depth < 24; k = k.parent, depth++) {
+			dug.addAll(WorldChecks.required(k.parent.pos, k.pos));
+		}
+		return dug;
 	}
 
 	private static double heuristic(BlockPos a, BlockPos b) {

@@ -25,6 +25,7 @@ public final class MinerRunner {
 	private static final Semaphore workerTurn = new Semaphore(0);
 	private static final Semaphore clientTurn = new Semaphore(0);
 	private static volatile boolean running;
+	private static volatile boolean paused;
 	private static volatile String cancelReason;
 	private static volatile StripMineJob current;
 	private static volatile Thread worker;
@@ -39,6 +40,36 @@ public final class MinerRunner {
 		return running;
 	}
 
+	public static boolean isPaused() {
+		return running && paused;
+	}
+
+	/** Freezes the job where it is and gives control back to the player (call on the client thread). */
+	public static boolean pause() {
+		if (!running || paused) {
+			return false;
+		}
+		paused = true;
+		Minecraft mc = Minecraft.getInstance();
+		mc.options.keyUp.setDown(false);
+		mc.options.keyShift.setDown(false);
+		mc.options.keyJump.setDown(false);
+		mc.options.keySprint.setDown(false);
+		mc.options.keyUse.setDown(false);
+		if (mc.gameMode != null) {
+			mc.gameMode.stopDestroyBlock();
+		}
+		return true;
+	}
+
+	public static boolean resume() {
+		if (!running || !paused) {
+			return false;
+		}
+		paused = false;
+		return true;
+	}
+
 	public static StripMineJob current() {
 		return current;
 	}
@@ -50,6 +81,7 @@ public final class MinerRunner {
 		workerTurn.drainPermits();
 		clientTurn.drainPermits();
 		cancelReason = null;
+		paused = false;
 		current = job;
 		running = true;
 		Thread thread = new Thread(() -> {
@@ -77,6 +109,7 @@ public final class MinerRunner {
 				sendChat(endMessage);
 				current = null;
 				worker = null;
+				paused = false;
 				running = false;
 				clientTurn.release();
 			}
@@ -100,6 +133,9 @@ public final class MinerRunner {
 		}
 		if (mc.player == null || mc.level == null || mc.gameMode == null) {
 			stop("Stopped: left the world.");
+		}
+		if (paused && cancelReason == null) {
+			return; // the job waits where it is until resumed (or stopped)
 		}
 		workerTurn.release();
 		while (true) {

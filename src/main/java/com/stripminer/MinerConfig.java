@@ -12,7 +12,7 @@ import java.io.Writer;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
-import java.util.HashSet;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
 
@@ -31,12 +31,10 @@ public final class MinerConfig {
 	public int branchLength = 5;
 	/** How many blocks the main tunnel moves forward between branches. */
 	public int branchSpacing = 3;
-	/** A torch is placed on the floor of the main tunnel every this many blocks (0 = never). */
-	public int torchInterval = 0;
 	/** Stop after the main tunnel is this long (0 = keep going until stopped). */
 	public int maxTunnelLength = 0;
 	/** How far (horizontally) the miner may dig away from the tunnel to follow an ore vein. */
-	public int veinRadius = 8;
+	public int veinRadius = 10;
 	/** Throw away cobblestone/deepslate/dirt etc. when the inventory is almost full. */
 	public boolean dropJunk = true;
 	/** Eat when the hunger bar drops to this value or below (out of 20). */
@@ -59,6 +57,12 @@ public final class MinerConfig {
 	public boolean isolateLava = true;
 	/** Afterwards, take back the gravel pillars that can be removed without letting lava flow (torch trick). */
 	public boolean collectGravel = true;
+	/** Height to dig stairs down (or up) to when starting with /stripmine start (no Y given). */
+	public int targetY = -58;
+	/** Dig a spiral staircase (2x2, turning right every step) instead of a straight one. */
+	public boolean spiralStaircase = false;
+	/** Ore clusters are assumed to fit in a box this many blocks wide, high and deep (2 = 2x2x2). */
+	public int clusterSize = 2;
 	/** Used to update old config files. */
 	public int configVersion = 0;
 
@@ -81,13 +85,13 @@ public final class MinerConfig {
 						c.branchSpacing = 3; // the old default of 6 was a misunderstanding
 					}
 					if (c.configVersion < 3) {
-						if (c.torchInterval == 28) {
-							c.torchInterval = 0; // torches are now off by default
-						}
 						c.branchLength = Math.min(c.branchLength, 5);
 					}
-					if (c.configVersion < 3) {
-						c.configVersion = 3;
+					if (c.configVersion < 4 && c.veinRadius == 8) {
+						c.veinRadius = 10; // new default
+					}
+					if (c.configVersion < 4) {
+						c.configVersion = 4;
 						c.save();
 					}
 					return c;
@@ -97,7 +101,7 @@ public final class MinerConfig {
 			}
 		}
 		MinerConfig c = new MinerConfig();
-		c.configVersion = 3;
+		c.configVersion = 4;
 		c.save();
 		return c;
 	}
@@ -114,7 +118,7 @@ public final class MinerConfig {
 	}
 
 	public Set<Block> resolveOres() {
-		Set<Block> blocks = new HashSet<>();
+		Set<Block> blocks = new LinkedHashSet<>();
 		for (String id : ores) {
 			Identifier rl = Identifier.tryParse(id);
 			if (rl != null && BuiltInRegistries.BLOCK.containsKey(rl)) {

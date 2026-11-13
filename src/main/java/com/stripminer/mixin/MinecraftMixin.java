@@ -16,7 +16,7 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 public class MinecraftMixin {
 	@Inject(method = "continueAttack", at = @At("HEAD"), cancellable = true)
 	private void stripminer$skipVanillaAttack(boolean leftClick, CallbackInfo ci) {
-		if (MinerRunner.isRunning()) {
+		if (MinerRunner.isRunning() && !MinerRunner.isPaused()) {
 			ci.cancel();
 		}
 	}
