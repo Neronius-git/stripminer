@@ -1,0 +1,42 @@
+name: Bug report
+description: Something doesn't work or the game crashed
+labels: [bug]
+body:
+  - type: input
+    id: version
+    attributes:
+      label: Mod version
+      description: Shown at the top of `/stripmine help`, or in the jar's file name.
+      placeholder: 26.3.5.3
+    validations:
+      required: true
+  - type: dropdown
+    id: mode
+    attributes:
+      label: What were you doing?
+      options:
+        - Strip mining
+        - Digging down to a height (staircase)
+        - Tree mode
+        - Commands / settings
+        - Something else
+    validations:
+      required: true
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened, and what did you expect?
+      description: The chat message the mod showed helps a lot (it usually says why it stopped and where).
+    validations:
+      required: true
+  - type: textarea
+    id: log
+    attributes:
+      label: Crash report or log
+      description: If the game crashed or showed an error, paste it here (from `logs/latest.log` or the crash report).
+      render: text
+  - type: input
+    id: mods
+    attributes:
+      label: Other mods
+      description: For example Sodium, Iris, ...

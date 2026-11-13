@@ -195,3 +195,12 @@ You need JDK 25 or newer.
 
 The jar ends up in `build/libs/`. To test changes, `./gradlew runClient` starts Minecraft with the
 mod loaded (or use the *Minecraft Client* run configuration in IntelliJ IDEA).
+
+## Bugs and ideas
+
+Found a bug or have an idea? [Open an issue](https://github.com/Neronius-git/stripminer/issues/new/choose).
+For bugs, the chat message the mod showed (or the crash log) helps a lot.
+
+## License
+
+[MIT](LICENSE)

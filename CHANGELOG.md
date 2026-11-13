@@ -4,6 +4,11 @@ Version numbers are **26.3.X.x**: `26.3` is the Minecraft version, **X** goes up
 and new features, **x** for small changes and fixes (e.g. 26.3.5.0 → 26.3.5.1 → 26.3.6.0).
 Older versions were called 2.0.0-2.5.0; they are listed here under their new numbers.
 
+## 26.3.5.3
+- Added the MIT license (included in the jar).
+- Mod info now links to the GitHub page, issues and sources, and has an up-to-date description.
+- Bug report and feature idea forms for GitHub issues.
+
 ## 26.3.5.2
 - Fixed the adaptive staircase stopping right away: open air above ground (and the tunnel or
   room you start in) was taken for a cave. A cave is now only open space underground (no sky

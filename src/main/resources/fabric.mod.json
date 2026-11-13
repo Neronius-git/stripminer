@@ -3,8 +3,13 @@
 	"id": "stripminer",
 	"version": "${version}",
 	"name": "Strip Miner",
-	"description": "Automatically strip-mines at a chosen height: 5-block side branches every 6 blocks, mines revealed ore veins, picks up the drops, avoids lava and places torches.",
-	"authors": ["neronius"],
+	"description": "Strip-mines on its own: digs down to diamond level, mines every ore cluster it finds (including hidden parts), picks up the drops and avoids lava. Also chops down big 2x2 trees and whole groups of them. Commands: /stripmine help",
+	"authors": ["Neronius-git"],
+	"contact": {
+		"homepage": "https://github.com/Neronius-git/stripminer",
+		"sources": "https://github.com/Neronius-git/stripminer",
+		"issues": "https://github.com/Neronius-git/stripminer/issues"
+	},
 	"license": "MIT",
 	"icon": "assets/stripminer/icon.png",
 	"environment": "client",

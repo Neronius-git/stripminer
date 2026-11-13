@@ -1,0 +1,11 @@
+name: Feature idea
+description: Suggest something new or a change
+labels: [enhancement]
+body:
+  - type: textarea
+    id: idea
+    attributes:
+      label: What should the mod do?
+      description: Describe it the way you'd explain it to a friend. A sketch or screenshot is welcome.
+    validations:
+      required: true
